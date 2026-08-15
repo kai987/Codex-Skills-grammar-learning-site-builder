@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grammar Learning Site Builder"
+  short_description: "Build accessible, content-led multilingual grammar sites"
+  default_prompt: "Use $multilingual-grammar-learning-site-builder to build and UX-validate a responsive, content-led learning site from this grammar report."
