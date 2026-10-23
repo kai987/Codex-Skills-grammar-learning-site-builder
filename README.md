@@ -27,6 +27,13 @@ independent checks run on Ubuntu with Node.js 24 and npm 11.18.0:
 `typecheck`, `build`, `test`, and `format:check`. Each installs dependencies with
 `npm ci`; a failing check does not cancel the other checks.
 
+A fifth check, `generated-files`, scans the entire Git commit tree with Node.js
+and no dependency installation. It rejects generated directories at any depth
+(including `output/`, caches, build output, coverage, and dependencies), build
+metadata/logs, archives, media exports, and known generated reports. Source
+assets, schemas, and synthetic report fixtures under `tests/fixtures/` remain
+allowed. Ignored or untracked local build output does not fail the check.
+
 ## Contributing
 
 `main` is protected. All changes must be submitted through a pull request;
@@ -54,11 +61,12 @@ direct pushes to `main` are blocked, including for administrators.
    then rerun `npm run format:check`. Keep generated `output/`, reports, videos,
    build artifacts, caches, and `node_modules/` out of commits.
 
-3. Commit the intended files, push your branch, and open a PR targeting `main`.
-   Describe the change and the checks you ran.
+3. Commit the intended files, then run `npm run check:generated-files` to inspect
+   that commit before pushing your branch. Open a PR targeting `main` and
+   describe the change and the checks you ran.
 
-4. Wait for all four required GitHub Actions checks to pass: `typecheck`,
-   `build`, `test`, and `format:check`. A PR cannot merge while any required
+4. Wait for all five required GitHub Actions checks to pass: `typecheck`,
+   `build`, `test`, `format:check`, and `generated-files`. A PR cannot merge while any required
    check is pending or failing. The PR branch must also be up to date with
    `main`; if `main` advances, update your branch and wait for CI to pass again
    before merging.

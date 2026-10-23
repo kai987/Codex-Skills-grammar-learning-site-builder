@@ -8,14 +8,16 @@
 
 <!-- Required: fill in every result with Pass/Fail and a short summary or link.
 If a command was not run locally, write "Not run" and explain why.
-All four required GitHub Actions checks must pass before this PR can merge. -->
+All five required GitHub Actions checks must pass before this PR can merge.
+Run the generated-file check after committing the intended changes. -->
 
-| Check            | Command                | Result |
-| ---------------- | ---------------------- | ------ |
-| Type checking    | `npm run typecheck`    |        |
-| Production build | `npm run build`        |        |
-| Tests            | `npm test`             |        |
-| Formatting       | `npm run format:check` |        |
+| Check            | Command                         | Result |
+| ---------------- | ------------------------------- | ------ |
+| Type checking    | `npm run typecheck`             |        |
+| Production build | `npm run build`                 |        |
+| Tests            | `npm test`                      |        |
+| Formatting       | `npm run format:check`          |        |
+| Generated files  | `npm run check:generated-files` |        |
 
 ## Generated-file confirmation
 

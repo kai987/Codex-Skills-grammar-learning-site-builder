@@ -15,6 +15,7 @@
   "scripts": {
     "build": "tsc -b && npm run build -w @mvl/grammar-learning-site-template",
     "typecheck": "tsc -b --pretty false",
+    "check:generated-files": "node scripts/check-generated-files.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
