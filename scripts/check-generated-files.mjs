@@ -58,9 +58,7 @@ export function findGeneratedFiles(files) {
   return files.flatMap((file) => {
     const parts = file.toLowerCase().split("/");
     const name = parts.at(-1);
-    const directory = parts
-      .slice(0, -1)
-      .find((part) => generatedDirectories.has(part));
+    const directory = parts.find((part) => generatedDirectories.has(part));
     let reason;
     if (directory) reason = `generated directory: ${directory}/`;
     else if (generatedNames.has(name)) reason = "cache or coverage metadata";
@@ -79,7 +77,7 @@ export function findGeneratedFiles(files) {
 export function checkGeneratedFiles(cwd = process.cwd()) {
   const files = execFileSync(
     "git",
-    ["ls-tree", "-r", "--name-only", "-z", "HEAD"],
+    ["ls-tree", "--full-tree", "-r", "--name-only", "-z", "HEAD"],
     {
       cwd,
       encoding: "utf8",

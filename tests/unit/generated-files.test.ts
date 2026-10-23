@@ -45,6 +45,10 @@ describe("generated-file policy", () => {
     "video.mp4",
     "OUTPUT/日本語 with space.txt",
     "cache/line\nbreak.txt",
+    "output",
+    "node_modules",
+    ".venv",
+    "src/.cache",
   ])("rejects %s", (file) => {
     expect(findGeneratedFiles([file])).toHaveLength(1);
   });
@@ -93,7 +97,9 @@ describe("generated-file policy", () => {
       git("init", "--quiet");
       writeFileSync(path.join(root, ".gitignore"), "output/\n");
       writeFileSync(path.join(root, "README.md"), "Source fixture\n");
-      git("add", ".gitignore", "README.md");
+      mkdirSync(path.join(root, "src"));
+      writeFileSync(path.join(root, "src", "index.ts"), "export {};\n");
+      git("add", ".gitignore", "README.md", "src/index.ts");
       commit();
       mkdirSync(path.join(root, "output"));
       writeFileSync(
@@ -107,6 +113,12 @@ describe("generated-file policy", () => {
       const rejected = run();
       expect(rejected.status).toBe(1);
       expect(rejected.stderr).toContain("output/日本語 with space.txt");
+      const fromSubdirectory = spawnSync(process.execPath, [script], {
+        cwd: path.join(root, "src"),
+        encoding: "utf8",
+      });
+      expect(fromSubdirectory.status).toBe(1);
+      expect(fromSubdirectory.stderr).toContain("output/日本語 with space.txt");
 
       git("rm", "output/日本語 with space.txt");
       commit();
