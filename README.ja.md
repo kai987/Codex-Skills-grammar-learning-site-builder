@@ -1,5 +1,7 @@
 # Multilingual Grammar Learning Site Builder
 
+[![CI](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/actions/workflows/ci.yml)
+
 [English](README.md) | 日本語
 
 検証済みの `grammar-report.json` から、文と文法を対話的に学べる静的 Web サイトを生成する Codex スキルのコアランタイムです。

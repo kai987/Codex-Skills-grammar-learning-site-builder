@@ -1,5 +1,7 @@
 # Multilingual Grammar Learning Site Builder
 
+[![CI](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/actions/workflows/ci.yml)
+
 English | [日本語](README.ja.md)
 
 Standalone core runtime for the Codex skill that turns a validated multilingual
