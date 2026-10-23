@@ -27,6 +27,42 @@ independent checks run on Ubuntu with Node.js 24 and npm 11.18.0:
 `typecheck`, `build`, `test`, and `format:check`. Each installs dependencies with
 `npm ci`; a failing check does not cancel the other checks.
 
+## Contributing
+
+`main` is protected. All changes must be submitted through a pull request;
+direct pushes to `main` are blocked, including for administrators.
+
+1. Start a branch from the latest `main` in your local clone:
+
+   ```bash
+   git switch main
+   git pull --ff-only origin main
+   git switch -c codex/your-change
+   ```
+
+2. Make your changes and run the same checks as CI with Node.js 24 and npm 11.18.0:
+
+   ```bash
+   npm ci
+   npm run typecheck
+   npm run build
+   npm test
+   npm run format:check
+   ```
+
+   If formatting needs correction, run `npm run format`, review the changes,
+   then rerun `npm run format:check`. Keep generated `output/`, reports, videos,
+   build artifacts, caches, and `node_modules/` out of commits.
+
+3. Commit the intended files, push your branch, and open a PR targeting `main`.
+   Describe the change and the checks you ran.
+
+4. Wait for all four required GitHub Actions checks to pass: `typecheck`,
+   `build`, `test`, and `format:check`. A PR cannot merge while any required
+   check is pending or failing. The PR branch must also be up to date with
+   `main`; if `main` advances, update your branch and wait for CI to pass again
+   before merging.
+
 ## Requirements
 
 - Node.js 24

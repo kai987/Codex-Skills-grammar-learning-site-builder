@@ -43,6 +43,40 @@ Markdown 版レポートは必須ではなく、生の字幕や文章を JSON �
 Ubuntu・Node.js 24・npm 11.18.0 の環境で、`npm ci` の後に `typecheck`・`build`・`test`・`format:check` を独立したジョブで実行します。
 一つのチェックが失敗しても、ほかのチェックは継続します。
 
+## コントリビューション
+
+`main` は保護されています。変更は必ずプルリクエスト（PR）で提出してください。
+管理者を含め、`main` への直接 push はできません。
+
+1. ローカルのクローンで最新の `main` から作業ブランチを作成します。
+
+   ```bash
+   git switch main
+   git pull --ff-only origin main
+   git switch -c codex/your-change
+   ```
+
+2. 変更後、Node.js 24・npm 11.18.0 で CI と同じチェックを実行します。
+
+   ```bash
+   npm ci
+   npm run typecheck
+   npm run build
+   npm test
+   npm run format:check
+   ```
+
+   フォーマットの修正が必要な場合は `npm run format` を実行し、差分を確認してから `npm run format:check` を再実行します。
+   生成済みの `output/`、レポート、動画、ビルド成果物、キャッシュ、`node_modules/` はコミットに含めないでください。
+
+3. 対象のファイルをコミットして作業ブランチを push し、`main` をマージ先とする PR を作成します。
+   PR には変更内容と実行したチェックを記載してください。
+
+4. GitHub Actions の必須チェック `typecheck`・`build`・`test`・`format:check` の四つすべてが成功するのを待ちます。
+   一つでも実行待ち・実行中・失敗の状態であればマージできません。
+   また、PR のブランチは最新の `main` に追従している必要があります。
+   `main` が更新された場合は作業ブランチに反映し、CI が再びすべて成功してからマージしてください。
+
 ## 動作環境
 
 - Node.js 24
