@@ -41,6 +41,14 @@ the current PR body using a read-only token and runs when a PR is opened,
 edited, reopened, updated with commits, or marked ready for review. Editing the
 description reruns this check without rerunning the other five CI checks.
 
+After the check finishes, a separate `PR description feedback` workflow lists
+missing items in a single bot comment. Fixing the description updates that same
+comment to show completion; later failures reuse it, and unchanged feedback is
+not posted again. PRs that have never failed receive no extra success comment.
+The writer uses only trusted default-branch code and a limited PR-comment token,
+not PR code, dependencies, or artifacts. It also handles fork PRs whose workflow
+metadata has no PR-number list. It does not replace the six required checks.
+
 ## Contributing
 
 `main` is protected. All changes must be submitted through a pull request;
