@@ -632,7 +632,7 @@ a {
 
 .level-distribution li {
   display: grid;
-  grid-template-columns: 30px 1fr 30px;
+  grid-template-columns: 72px 1fr 30px;
   gap: 12px;
   align-items: center;
   min-height: 30px;

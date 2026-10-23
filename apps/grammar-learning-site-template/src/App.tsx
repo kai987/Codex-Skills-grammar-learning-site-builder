@@ -1,5 +1,5 @@
 import type { GrammarReport } from "@mvl/shared";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { loadSiteData, type BuildManifest } from "./data.js";
 import { messages, type UiLanguage } from "./i18n/index.js";
@@ -20,13 +20,6 @@ interface ArticleChapter {
 const STORAGE_KEY = "kotoba-atlas.preferences.v1";
 const UI_LANGUAGES: UiLanguage[] = ["zh-CN", "ja-JP", "en"];
 const THEMES: Theme[] = ["system", "light", "dark"];
-const JLPT_LEVELS = ["N5", "N4", "N3", "N2", "N1"] as const;
-const FEATURED_ROUTE_HEADINGS = [
-  "キャリアの正解の消失に“不安”が膨らむ時代。",
-  "前職に不満なし、それでも募った焦り",
-  "「手応え」と「成長」が納得感のあるキャリアに",
-  "受託、SES、自社プロダクトの三本柱で多様な経験が可能に",
-] as const;
 
 function initialParam(name: string): string | null {
   return new URLSearchParams(window.location.search).get(name);
@@ -95,15 +88,10 @@ function buildArticleChapters(sentences: Sentence[]): ArticleChapter[] {
   const firstSentence = sentences[0];
   if (firstSentence === undefined) return [];
 
-  const featuredStarts = FEATURED_ROUTE_HEADINGS.map((heading) =>
-    sentences.findIndex((sentence) => sentence.text === heading),
-  ).filter((index) => index >= 0);
   const fallbackStarts = [0, 0.25, 0.5, 0.75].map((position) =>
     Math.min(sentences.length - 1, Math.floor(sentences.length * position)),
   );
-  const starts = [
-    ...new Set(featuredStarts.length >= 3 ? featuredStarts : fallbackStarts),
-  ]
+  const starts = [...new Set(fallbackStarts)]
     .toSorted((left, right) => left - right)
     .slice(0, 4);
 
@@ -146,6 +134,7 @@ export function App() {
     () => initialParam("grammar") ?? "",
   );
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const sentenceDisplayRef = useRef<HTMLDivElement>(null);
   const sentenceStripRef = useRef<HTMLOListElement>(null);
@@ -254,7 +243,7 @@ export function App() {
         : "smooth",
       left: Math.min(maxLeft, Math.max(0, desiredLeft)),
     });
-  }, [filtered.length, selected?.id]);
+  }, [filtered.length, selected?.id, view]);
 
   useEffect(() => {
     document.documentElement.lang = uiLanguage;
@@ -295,24 +284,59 @@ export function App() {
     document.title = pageTitle ? `${pageTitle} — Kotoba Atlas` : "Kotoba Atlas";
   }, [report]);
 
-  const selectSentence = (sentence: Sentence, reveal = false): void => {
-    setSelectedId(sentence.id);
-    setSelectedGrammarId(sentence.grammar[0]?.id ?? "");
-    if (videoRef.current !== null && sentence.start !== null) {
-      videoRef.current.currentTime = sentence.start;
-    }
-    if (reveal) {
-      window.requestAnimationFrame(() => {
-        sentenceDisplayRef.current?.scrollIntoView({
-          behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
-            .matches
-            ? "auto"
-            : "smooth",
-          block: "start",
+  const selectSentence = useCallback(
+    (sentence: Sentence, reveal = false): void => {
+      setSelectedId(sentence.id);
+      setSelectedGrammarId(sentence.grammar[0]?.id ?? "");
+      if (videoRef.current !== null && sentence.start !== null) {
+        videoRef.current.currentTime = sentence.start;
+      }
+      if (reveal) {
+        window.requestAnimationFrame(() => {
+          sentenceDisplayRef.current?.scrollIntoView({
+            behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+              .matches
+              ? "auto"
+              : "smooth",
+            block: "start",
+          });
         });
-      });
-    }
-  };
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (view !== "study") return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+      )
+        return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.closest("input, textarea, select, [role='slider']"))
+      )
+        return;
+      const index = filtered.findIndex(
+        (sentence) => sentence.id === selected?.id,
+      );
+      if (index < 0) return;
+      const next = filtered[index + (event.key === "ArrowRight" ? 1 : -1)];
+      if (next !== undefined) {
+        event.preventDefault();
+        selectSentence(next, true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [filtered, selected?.id, selectSentence, view]);
 
   const selectGrammar = (grammarId: string): void => {
     setSelectedGrammarId(grammarId);
@@ -365,12 +389,14 @@ export function App() {
     );
   }
 
-  const heroTitle = report.sentences[0]?.text ?? "Multilingual Grammar Study";
-  const heroSubtitle = report.sentences[1]?.text ?? report.source.title;
-  const heroDeck =
-    report.sentences[1]?.translation ??
-    report.sentences[0]?.translation ??
-    t.tagline;
+  const heroTitle = report.source.title ?? "Multilingual Grammar Study";
+  const firstTimedSentence = report.sentences.find(hasValidTimeRange);
+  const lastTimedSentence = report.sentences.findLast(hasValidTimeRange);
+  const heroSubtitle =
+    firstTimedSentence && lastTimedSentence
+      ? `${formatTime(firstTimedSentence.start)} — ${formatTime(lastTimedSentence.end)}`
+      : null;
+  const heroDeck = t.studyGuide;
   const selectedPosition =
     selected === null
       ? 0
@@ -389,20 +415,22 @@ export function App() {
     activeGrammar === null || selected === null
       ? 0
       : selected.grammar.findIndex((item) => item.id === activeGrammar.id) + 1;
-  const maxJlptCount = Math.max(
+  const levelDistribution = Object.entries(report.summary.levelCounts)
+    .filter(([key, count]) => !key.startsWith("unknown:") && count > 0)
+    .toSorted(([left], [right]) =>
+      left.startsWith("JLPT:") && right.startsWith("JLPT:")
+        ? right.localeCompare(left)
+        : left.localeCompare(right),
+    );
+  const maxLevelCount = Math.max(
     1,
-    ...JLPT_LEVELS.map(
-      (item) => report.summary.levelCounts[`JLPT:${item}`] ?? 0,
-    ),
+    ...levelDistribution.map(([, count]) => count),
   );
   const unmappedCount = report.summary.levelCounts["unknown:unmapped"] ?? 0;
   const dominantLanguage = Object.entries(
     report.summary.languageCounts,
   ).toSorted((left, right) => right[1] - left[1])[0]?.[0];
-  const languageProfile =
-    dominantLanguage === "ja"
-      ? t.japaneseLed
-      : `${dominantLanguage ?? "—"} · ${report.languages.join(" / ")}`;
+  const languageProfile = `${dominantLanguage ?? "—"} · ${report.languages.join(" / ")}`;
   const sentenceDensity =
     selected === null
       ? "standard"
@@ -457,7 +485,9 @@ export function App() {
             {t.grammarNotes}
           </button>
           {view === "study" && timedSentences.length > 0 ? (
-            <a href="#timeline">{t.timeline}</a>
+            <a href="#timeline" onClick={() => setTimelineOpen(true)}>
+              {t.timeline}
+            </a>
           ) : null}
         </nav>
 
@@ -508,7 +538,8 @@ export function App() {
             <div className="hero-copy">
               <div className="hero-notation">
                 <span>
-                  FIELD NOTE / {report.analysis.generatedAt.slice(0, 4)}
+                  {reportHasTimedSentences ? "DIALOGUE NOTES" : "READING NOTES"}{" "}
+                  / {report.analysis.generatedAt.slice(0, 4)}
                 </span>
                 <span>
                   {report.source.type.toUpperCase()} ·{" "}
@@ -519,10 +550,13 @@ export function App() {
               {heroSubtitle === null ? null : (
                 <p className="hero-subtitle">{heroSubtitle}</p>
               )}
-              <p className="hero-deck">{heroDeck}</p>
+              <p className="hero-deck">
+                {report.sentences.length === 0 ? t.noStudySentences : heroDeck}
+              </p>
               <button
                 className="primary-action"
                 type="button"
+                disabled={report.sentences.length === 0}
                 onClick={() => changeView("study")}
               >
                 <span>{t.startReading}</span>
@@ -543,7 +577,12 @@ export function App() {
                     <button type="button" onClick={() => openChapter(chapter)}>
                       <span className="route-number">{chapter.number}</span>
                       <span className="route-copy">
-                        <strong>{chapter.title}</strong>
+                        <strong>
+                          {reportHasTimedSentences
+                            ? `${formatTime(report.sentences[chapter.startIndex]?.start ?? null)} · `
+                            : ""}
+                          {chapter.title}
+                        </strong>
                         <small>{chapter.translation}</small>
                       </span>
                       <span className="route-range">{rangeLabel(chapter)}</span>
@@ -577,19 +616,25 @@ export function App() {
               <dl>
                 <div>
                   <dt>{t.articleFormat}</dt>
-                  <dd>{t.interviewArticle}</dd>
+                  <dd>
+                    {reportHasTimedSentences ? t.timedReading : t.textReading}
+                  </dd>
                 </div>
                 <div>
                   <dt>{t.primaryLanguage}</dt>
                   <dd>{languageProfile}</dd>
                 </div>
                 <div>
-                  <dt>{t.topics}</dt>
-                  <dd>{t.topicSummary}</dd>
+                  <dt>{t.explanationLanguage}</dt>
+                  <dd>{report.explanationLanguage}</dd>
                 </div>
                 <div>
                   <dt>{t.difficultyRange}</dt>
-                  <dd>JLPT N5—N1</dd>
+                  <dd>
+                    {levelDistribution
+                      .map(([key]) => key.replace(":", " "))
+                      .join(" · ") || t.unmapped}
+                  </dd>
                 </div>
               </dl>
             </section>
@@ -600,14 +645,13 @@ export function App() {
                 <span>{report.summary.grammarPointCount} PT</span>
               </header>
               <ol>
-                {JLPT_LEVELS.map((item) => {
-                  const count = report.summary.levelCounts[`JLPT:${item}`] ?? 0;
+                {levelDistribution.map(([item, count]) => {
                   return (
                     <li key={item}>
-                      <span>{item}</span>
+                      <span>{item.replace(":", " ")}</span>
                       <div aria-hidden="true">
                         <i
-                          style={{ width: `${(count / maxJlptCount) * 100}%` }}
+                          style={{ width: `${(count / maxLevelCount) * 100}%` }}
                         />
                       </div>
                       <strong>{String(count).padStart(2, "0")}</strong>
@@ -677,7 +721,7 @@ export function App() {
                   title={t.clearFilters}
                 >
                   <span aria-hidden="true">×</span>
-                  <span className="sr-only">{t.clearFilters}</span>
+                  <span>{t.clearFilters}</span>
                 </button>
               </div>
             </div>
@@ -730,49 +774,77 @@ export function App() {
 
           {selected === null ? (
             <div className="empty-state">
-              <p>{t.noMatches}</p>
-              <button type="button" onClick={clearFilters}>
+              <p>
+                {report.sentences.length === 0
+                  ? t.noStudySentences
+                  : t.noMatches}
+              </p>
+              <button
+                type="button"
+                onClick={clearFilters}
+                disabled={report.sentences.length === 0}
+              >
                 {t.clearFilters}
               </button>
             </div>
           ) : (
             <>
-              <div className="study-layout">
-                <aside
-                  className="article-route-rail"
-                  aria-label={t.articleNavigator}
-                >
-                  <p>{t.articleNavigator}</p>
-                  <ol>
+              <div className="reader-toolbar">
+                <label className="segment-select">
+                  <span>{t.chapter}</span>
+                  <select
+                    aria-label={t.articleNavigator}
+                    value={currentChapter?.sentenceId ?? ""}
+                    onChange={(event) => {
+                      const chapter = chapters.find(
+                        (item) => item.sentenceId === event.target.value,
+                      );
+                      if (chapter) openChapter(chapter);
+                    }}
+                  >
                     {chapters.map((chapter) => (
-                      <li key={chapter.sentenceId}>
-                        <button
-                          type="button"
-                          className={
-                            chapter.sentenceId === currentChapter?.sentenceId
-                              ? "active"
-                              : ""
-                          }
-                          onClick={() => openChapter(chapter)}
-                          aria-current={
-                            chapter.sentenceId === currentChapter?.sentenceId
-                              ? "step"
-                              : undefined
-                          }
-                          aria-label={`${t.openChapter}: ${chapter.title}`}
-                          title={chapter.title}
-                        >
-                          <span>{chapter.number}</span>
-                          <i aria-hidden="true" />
-                        </button>
-                      </li>
+                      <option
+                        key={chapter.sentenceId}
+                        value={chapter.sentenceId}
+                      >
+                        {chapter.number} · {rangeLabel(chapter)}
+                      </option>
                     ))}
-                  </ol>
-                  <span className="rail-coordinate">
-                    {String(selectedPosition).padStart(3, "0")}
-                  </span>
-                </aside>
-
+                  </select>
+                </label>
+                <form
+                  className="sentence-jump"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const position = Number(
+                      new FormData(event.currentTarget).get("position"),
+                    );
+                    if (!Number.isInteger(position)) return;
+                    const sentence = report.sentences[position - 1];
+                    if (sentence) {
+                      clearFilters();
+                      selectSentence(sentence, true);
+                    }
+                  }}
+                >
+                  <label htmlFor="sentence-position">{t.jumpToSentence}</label>
+                  <input
+                    id="sentence-position"
+                    name="position"
+                    type="number"
+                    min="1"
+                    max={report.sentences.length}
+                    step="1"
+                    required
+                    key={selected.id}
+                    defaultValue={selectedPosition}
+                    title={t.jumpHint}
+                  />
+                  <button type="submit">{t.go}</button>
+                </form>
+                <span className="keyboard-hint">{t.keyboardHint}</span>
+              </div>
+              <div className="study-layout">
                 <article className="reader-canvas">
                   <header className="sentence-meta">
                     <p>
@@ -803,14 +875,16 @@ export function App() {
                     data-density={sentenceDensity}
                     ref={sentenceDisplayRef}
                   >
-                    <p className="chapter-label">
-                      {t.chapter} {currentChapter?.number ?? "—"} /{" "}
-                      {currentChapter?.title ?? heroTitle}
-                    </p>
-                    <p className="reading-line">
-                      {selected.reading ?? t.noReading}
-                    </p>
                     <h1>{selected.text}</h1>
+                    <div className="sentence-translation">
+                      <span>{t.translation}</span>
+                      <p>{selected.translation ?? t.noTranslation}</p>
+                    </div>
+                    <details className="reading-details">
+                      <summary>{t.reading}</summary>
+                      <p>{selected.reading ?? t.noReading}</p>
+                    </details>
+                    <p className="grammar-prompt">{t.selectGrammar}</p>
                     <div
                       className="grammar-strip"
                       aria-label={t.notesForSentence}
@@ -827,22 +901,13 @@ export function App() {
                         >
                           <span>{String(index + 1).padStart(2, "0")}</span>
                           <strong>{grammar.surface}</strong>
-                          <small>{grammar.category}</small>
+                          <small>
+                            {grammar.levelSystem} {grammar.level}
+                          </small>
                         </button>
                       ))}
                     </div>
                   </div>
-
-                  <dl className="translation-block">
-                    <div>
-                      <dt>{t.translation}</dt>
-                      <dd>{selected.translation ?? t.noTranslation}</dd>
-                    </div>
-                    <div>
-                      <dt>{t.reading}</dt>
-                      <dd>{selected.reading ?? t.noReading}</dd>
-                    </div>
-                  </dl>
 
                   {selected.needsReview ? (
                     <p className="warning" role="status">
@@ -896,6 +961,22 @@ export function App() {
                   aria-label={t.grammarNotes}
                   ref={grammarInspectorRef}
                 >
+                  <button
+                    className="back-to-sentence"
+                    type="button"
+                    onClick={() =>
+                      sentenceDisplayRef.current?.scrollIntoView({
+                        behavior: window.matchMedia(
+                          "(prefers-reduced-motion: reduce)",
+                        ).matches
+                          ? "auto"
+                          : "smooth",
+                        block: "start",
+                      })
+                    }
+                  >
+                    ↑ {t.backToSentence}
+                  </button>
                   <header className="inspector-heading">
                     <div>
                       <p className="eyebrow">{t.notesForSentence}</p>
@@ -910,7 +991,7 @@ export function App() {
                   {activeGrammar === null ? (
                     <div className="inspector-empty">
                       <span>00</span>
-                      <p>{t.noExamples}</p>
+                      <p>{t.noGrammar}</p>
                     </div>
                   ) : (
                     <article className="grammar-card" id={activeGrammar.id}>
@@ -938,10 +1019,12 @@ export function App() {
                           <dt>{t.meaning}</dt>
                           <dd>{activeGrammar.meaning}</dd>
                         </div>
-                        <div>
-                          <dt>{t.nuance}</dt>
-                          <dd>{activeGrammar.nuance ?? "—"}</dd>
-                        </div>
+                        {activeGrammar.nuance === null ? null : (
+                          <div>
+                            <dt>{t.nuance}</dt>
+                            <dd>{activeGrammar.nuance}</dd>
+                          </div>
+                        )}
                         {activeGrammar.context === null ? null : (
                           <div>
                             <dt>{t.context}</dt>
@@ -1034,8 +1117,18 @@ export function App() {
           )}
 
           {timedSentences.length === 0 ? null : (
-            <footer className="timeline" id="timeline" aria-label={t.timeline}>
-              <strong>{t.timeline}</strong>
+            <details
+              className="timeline"
+              id="timeline"
+              open={timelineOpen}
+              onToggle={(event) => setTimelineOpen(event.currentTarget.open)}
+            >
+              <summary>
+                {t.timeline}{" "}
+                <span>
+                  {timedSentences.length} {t.sentences}
+                </span>
+              </summary>
               <ol>
                 {timedSentences.map((sentence, index) => (
                   <li key={sentence.id}>
@@ -1051,7 +1144,7 @@ export function App() {
                   </li>
                 ))}
               </ol>
-            </footer>
+            </details>
           )}
         </main>
       )}

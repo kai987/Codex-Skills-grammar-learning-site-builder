@@ -8,11 +8,11 @@ export interface Messages {
   articleRoute: string;
   articleFacts: string;
   articleFormat: string;
-  interviewArticle: string;
+  timedReading: string;
+  textReading: string;
+  studyGuide: string;
   primaryLanguage: string;
-  japaneseLed: string;
-  topics: string;
-  topicSummary: string;
+  explanationLanguage: string;
   difficultyRange: string;
   grammarDistribution: string;
   unmapped: string;
@@ -39,6 +39,8 @@ export interface Messages {
   noTranslation: string;
   examples: string;
   noExamples: string;
+  noGrammar: string;
+  noStudySentences: string;
   formation: string;
   meaning: string;
   nuance: string;
@@ -55,5 +57,11 @@ export interface Messages {
   loadError: string;
   timeline: string;
   noMatches: string;
+  jumpToSentence: string;
+  jumpHint: string;
+  go: string;
+  keyboardHint: string;
+  selectGrammar: string;
+  backToSentence: string;
   filterSummary: (visible: number, total: number) => string;
 }
