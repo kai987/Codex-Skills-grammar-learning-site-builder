@@ -1,0 +1,43 @@
+name: PR description feedback
+
+on:
+  workflow_run:
+    workflows: [PR description]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# Serialize writers for this PR branch. Do not cancel an in-flight POST: the
+# request may have created a comment even if its response has not arrived yet.
+concurrency:
+  group: pr-description-feedback-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  comment:
+    name: pr-description-feedback
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # workflow_run uses the default branch. Never check out a PR head/merge
+      # ref, install PR dependencies, or download artifacts in this write job.
+      - name: Check out trusted default-branch code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Create or update the description feedback comment
+        run: node scripts/comment-pr-description.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
