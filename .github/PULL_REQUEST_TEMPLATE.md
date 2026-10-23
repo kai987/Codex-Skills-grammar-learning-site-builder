@@ -1,14 +1,17 @@
 ## Changes
 
-<!-- Required: describe what changed and why. Link related issues if applicable. -->
+<!-- Required: keep the three section headings and checklist wording unchanged.
+Replace the placeholder below with what changed and why, in any language.
+Comments and code-block examples do not count as filled-in content. -->
 
 -
 
 ## Validation
 
-<!-- Required: fill in every result with Pass/Fail and a short summary or link.
-If a command was not run locally, write "Not run" and explain why.
-All five required GitHub Actions checks must pass before this PR can merge.
+<!-- Required: keep every command row and fill in its Result cell.
+Use "Pass — summary or link", "Fail — summary or link", or "Not run — reason".
+A status alone (or a TODO/TBD placeholder) is not a complete result.
+All six required GitHub Actions checks, including pr-description, must pass.
 Run the generated-file check after committing the intended changes. -->
 
 | Check            | Command                         | Result |
@@ -21,7 +24,8 @@ Run the generated-file check after committing the intended changes. -->
 
 ## Generated-file confirmation
 
-<!-- Required: review the Files changed tab and confirm all items below. -->
+<!-- Required: review the Files changed tab and check all three items below.
+Incomplete descriptions fail pr-description. Editing this body reruns that check. -->
 
 - [ ] I reviewed the PR diff and included only intended source, documentation, tests, and configuration changes.
 - [ ] I did not commit `output/`, `cache/`, `temp/`, `node_modules/`, virtual environments, or other cache/dependency directories.

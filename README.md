@@ -34,6 +34,13 @@ metadata/logs, archives, media exports, and known generated reports. Source
 assets, schemas, and synthetic report fixtures under `tests/fixtures/` remain
 allowed. Ignored or untracked local build output does not fail the check.
 
+A sixth check, [`pr-description`](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/actions/workflows/pr-description.yml),
+requires the PR template to be completed: describe the changes, fill in every
+validation result, and check all three generated-file confirmations. It reads
+the current PR body using a read-only token and runs when a PR is opened,
+edited, reopened, updated with commits, or marked ready for review. Editing the
+description reruns this check without rerunning the other five CI checks.
+
 ## Contributing
 
 `main` is protected. All changes must be submitted through a pull request;
@@ -63,11 +70,18 @@ direct pushes to `main` are blocked, including for administrators.
 
 3. Commit the intended files, then run `npm run check:generated-files` to inspect
    that commit before pushing your branch. Open a PR targeting `main` and
-   describe the change and the checks you ran.
+   complete its template. Keep the three section headings, command rows, and
+   checklist wording unchanged. Write the changes in any language; fill each
+   Result cell with `Pass — summary or link`, `Fail — summary or link`, or
+   `Not run — reason`. Empty cells, status-only answers, TODO/TBD placeholders,
+   comments, and code-block examples do not count. Review the diff and check
+   all three generated-file confirmations.
 
-4. Wait for all five required GitHub Actions checks to pass: `typecheck`,
-   `build`, `test`, `format:check`, and `generated-files`. A PR cannot merge while any required
-   check is pending or failing. The PR branch must also be up to date with
+4. Wait for all six required GitHub Actions checks to pass: `typecheck`,
+   `build`, `test`, `format:check`, `generated-files`, and `pr-description`.
+   An incomplete description blocks merging; edit the PR body to fix it and
+   rerun the description check automatically. A PR cannot merge while any
+   required check is pending or failing. The PR branch must also be up to date with
    `main`; if `main` advances, update your branch and wait for CI to pass again
    before merging.
 
