@@ -35,6 +35,12 @@ React・TypeScript・Vite を使用し、元の語法・文法レポートを変
 入力には、対応するスキーマに適合した `grammar-report.json` が必要です。
 Markdown 版レポートは必須ではなく、生の字幕や文章を JSON の代わりに渡すことはできません。
 
+## 継続的インテグレーション
+
+[GitHub Actions CI](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/actions/workflows/ci.yml) は、すべての push とプルリクエストで自動実行され、手動で開始することもできます。
+Ubuntu・Node.js 24・npm 11.18.0 の環境で、`npm ci` の後に `typecheck`・`build`・`test`・`format:check` を独立したジョブで実行します。
+一つのチェックが失敗しても、ほかのチェックは継続します。
+
 ## 動作環境
 
 - Node.js 24

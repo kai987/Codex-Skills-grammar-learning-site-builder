@@ -17,6 +17,14 @@ The input report is validated and copied byte-for-byte into the site.
 - Jump by sentence number, switch sentences with arrow keys, and browse a collapsible timeline.
 - Keep mobile navigation within reach and return from a grammar explanation without losing the selection.
 
+## Continuous integration
+
+[GitHub Actions CI](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/actions/workflows/ci.yml)
+runs on every push and pull request, and can also be started manually. Four
+independent checks run on Ubuntu with Node.js 24 and npm 11.18.0:
+`typecheck`, `build`, `test`, and `format:check`. Each installs dependencies with
+`npm ci`; a failing check does not cancel the other checks.
+
 ## Requirements
 
 - Node.js 24
