@@ -2,21 +2,80 @@
 
 English | [日本語](README.ja.md)
 
-A standalone Codex skill runtime that turns a validated `grammar-report.json`
-into a responsive, static language-learning website built with React,
-TypeScript, and Vite.
+Standalone core runtime for the Codex skill that turns a validated multilingual
+`grammar-report.json` into a responsive, static React learning site.
 
-Features include sentence and grammar search, language and proficiency-level
-filters, shareable reading URLs, Chinese/Japanese/English UI, and light/dark/system
-themes. The input report is preserved byte-for-byte; video copying is optional.
+The generated site provides content-led editorial presentation, sentence and
+grammar search, language and level filters, shareable URL state, responsive
+reading navigation, light/dark/system themes, and optional local media copying.
+The input report is validated and copied byte-for-byte into the site.
 
-## Source availability
+## Reading experience
 
-The core runtime is currently on the
-[`codex/publish-core-runtime` branch](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/tree/codex/publish-core-runtime),
-in [draft PR #1](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/pull/1).
-It has not been merged into `main`. Check out that branch to run the builder.
+- Show only sentences with grammar notes, without changing the source report.
+- Use a compact two-column reader with translations beside the original and expandable readings.
+- Jump by sentence number, switch sentences with arrow keys, and browse a collapsible timeline.
+- Keep mobile navigation within reach and return from a grammar explanation without losing the selection.
 
-- [日本語のセットアップ・使い方](README.ja.md)
-- [English runtime instructions](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/blob/codex/publish-core-runtime/README.md)
-- [MIT license](LICENSE)
+## Requirements
+
+- Node.js 24
+- npm 11 or newer
+
+## Install and verify
+
+```bash
+git clone https://github.com/kai987/Codex-Skills-grammar-learning-site-builder.git
+cd Codex-Skills-grammar-learning-site-builder
+
+npm ci
+npm run typecheck
+npm run build
+npm test
+```
+
+## Build a site
+
+Run through the bundled skill entrypoint:
+
+```bash
+node .agents/skills/multilingual-grammar-learning-site-builder/scripts/run.mjs \
+  --input "/path/to/grammar-report.json" \
+  --output output/sample
+```
+
+Or call the focused CLI directly:
+
+```bash
+npm run build-learning-site -- \
+  --input "/path/to/grammar-report.json" \
+  --output output/sample
+```
+
+Add `--overwrite` to replace only the selected `site/` directory. Use
+`--copy-video /path/to/video.mp4` only when a local video copy is explicitly
+required.
+
+Serve the generated directory with any static server:
+
+```bash
+python3 -m http.server 4173 --bind 127.0.0.1 --directory output/sample/site
+```
+
+## Runtime scope
+
+This repository intentionally contains only the runnable site-builder closure:
+
+- `.agents/skills/multilingual-grammar-learning-site-builder`
+- `apps/grammar-learning-site-template`
+- `packages/site-builder-core`
+- the focused shared grammar-report schema and filesystem utilities
+- `schemas/grammar-report.schema.json`
+- the focused CLI and integration test
+
+It excludes generated `output/`, analysis reports, videos, caches, benchmarks,
+virtual environments, subtitle/transcription pipelines, and unrelated skills.
+
+## License
+
+[MIT](LICENSE). Source texts, reports, and videos retain their own usage conditions.
