@@ -53,7 +53,24 @@ even when the feedback comment is unchanged or no success comment is needed.
 Repeated runs do not add duplicate labels or comments. Label changes happen
 after the description check finishes; API errors fail the feedback job visibly.
 
-The writer uses only trusted default-branch code and limited PR write permission,
+Manually adding or removing `needs-description` on an open PR also starts the
+read-only `PR description label recheck` workflow. After it runs, trusted
+feedback recomputes the current description: an incomplete PR regains the
+label, while a complete PR loses it. Unrelated labels, GitHub bot accounts,
+bot-initiated reruns, and skipped recheck jobs do not cause feedback writes.
+The bot uses `GITHUB_TOKEN`, whose label events do not trigger another run,
+and repeated results remain idempotent. This optional recheck is separate from
+the six required checks; skipping it cannot replace their results.
+Rechecks do not cancel one another. Feedback writes remain serialized, with
+GitHub's bounded queue of up to 100 pending runs instead of replacing a pending
+run when another event arrives.
+
+GitHub may require approval for a fork's first workflow run, and `pull_request`
+workflows do not run while the PR has merge conflicts. Resolve conflicts or
+approve the run, then rerun the label recheck if needed.
+
+The writer uses only trusted default-branch code and limited PR write permission
+(plus read-only Actions access to verify recheck job results),
 not PR code, dependencies, or artifacts. It also handles fork PRs whose workflow
 metadata has no PR-number list. It does not replace the six required checks.
 
