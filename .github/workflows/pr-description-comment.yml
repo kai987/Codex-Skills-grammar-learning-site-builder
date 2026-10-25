@@ -37,7 +37,7 @@ jobs:
           node-version-file: .nvmrc
           package-manager-cache: false
 
-      - name: Create or update the description feedback comment
+      - name: Synchronize description feedback and needs-description label
         run: node scripts/comment-pr-description.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -45,7 +45,15 @@ After the check finishes, a separate `PR description feedback` workflow lists
 missing items in a single bot comment. Fixing the description updates that same
 comment to show completion; later failures reuse it, and unchanged feedback is
 not posted again. PRs that have never failed receive no extra success comment.
-The writer uses only trusted default-branch code and a limited PR-comment token,
+The same workflow adds `needs-description` when the current description is
+incomplete and removes it once the description is complete. It creates the
+repository label on first use if needed, without changing an existing label's
+color or description. It preserves all other PR labels and repairs label state
+even when the feedback comment is unchanged or no success comment is needed.
+Repeated runs do not add duplicate labels or comments. Label changes happen
+after the description check finishes; API errors fail the feedback job visibly.
+
+The writer uses only trusted default-branch code and limited PR write permission,
 not PR code, dependencies, or artifacts. It also handles fork PRs whose workflow
 metadata has no PR-number list. It does not replace the six required checks.
 

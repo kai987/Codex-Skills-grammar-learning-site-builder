@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   commentMarker,
+  descriptionLabel,
   renderDescriptionComment,
   updateDescriptionComments,
 } from "../../scripts/comment-pr-description.mjs";
@@ -64,7 +65,12 @@ const response = (value: unknown) => ({
 });
 
 function fakeGitHub(prs = [pr()], comments = new Map<number, Comment[]>()) {
-  const state = { prs, comments, nextCommentId: 900 };
+  const state = {
+    prs,
+    comments,
+    labels: new Map<number, { name: string }[]>(),
+    nextCommentId: 900,
+  };
   const fetchImpl = vi.fn(async (input: string, init: RequestInit = {}) => {
     const url = new URL(input);
     const route = url.pathname.replace(`/repos/${repository}`, "");
@@ -76,6 +82,33 @@ function fakeGitHub(prs = [pr()], comments = new Map<number, Comment[]>()) {
       return response(
         state.prs.find((item) => item.number === Number(singlePR[1])),
       );
+    if (route === `/labels/${descriptionLabel}`)
+      return response({ name: descriptionLabel });
+    const issueLabels = route.match(/^\/issues\/(\d+)\/labels$/);
+    if (issueLabels) {
+      const number = Number(issueLabels[1]);
+      const existing = state.labels.get(number) ?? [];
+      if (init.method === "POST") {
+        const names = JSON.parse(String(init.body)).labels as string[];
+        state.labels.set(number, [
+          ...existing,
+          ...names
+            .filter((name) => !existing.some((label) => label.name === name))
+            .map((name) => ({ name })),
+        ]);
+        return response(state.labels.get(number));
+      }
+      return response(existing.slice((page - 1) * 100, page * 100));
+    }
+    const removedLabel = route.match(/^\/issues\/(\d+)\/labels\/([^/]+)$/);
+    if (removedLabel && init.method === "DELETE") {
+      const number = Number(removedLabel[1]);
+      const remaining = (state.labels.get(number) ?? []).filter(
+        (label) => label.name !== decodeURIComponent(removedLabel[2]),
+      );
+      state.labels.set(number, remaining);
+      return response(remaining);
+    }
     const issueComments = route.match(/^\/issues\/(\d+)\/comments$/);
     if (issueComments) {
       const number = Number(issueComments[1]);
@@ -101,7 +134,13 @@ function fakeGitHub(prs = [pr()], comments = new Map<number, Comment[]>()) {
     }
     throw new Error(`Unexpected request: ${init.method ?? "GET"} ${route}`);
   });
-  const writes = () => fetchImpl.mock.calls.filter(([, init]) => init?.method);
+  // These regression assertions isolate comment writes; label behavior has its
+  // own persistent-state integration tests in pr-description-label.test.ts.
+  const writes = () =>
+    fetchImpl.mock.calls.filter(
+      ([url, init]) =>
+        init?.method && /\/issues\/(?:\d+\/comments|comments\/\d+)$/.test(url),
+    );
   return { state, fetchImpl, writes };
 }
 
@@ -132,16 +171,22 @@ describe("sticky PR description feedback", () => {
     const update = () =>
       updateDescriptionComments({ ...metadata, fetchImpl: api.fetchImpl });
 
-    expect(await update()).toEqual([{ number: 7, action: "created", id: 900 }]);
+    expect(await update()).toMatchObject([
+      { number: 7, action: "created", id: 900 },
+    ]);
     expect(api.state.comments.get(7)).toHaveLength(1);
     expect(api.state.comments.get(7)![0].body).toContain("incomplete ❌");
 
     api.state.prs[0].body = completed;
-    expect(await update()).toEqual([{ number: 7, action: "updated", id: 900 }]);
+    expect(await update()).toMatchObject([
+      { number: 7, action: "updated", id: 900 },
+    ]);
     expect(api.state.comments.get(7)![0].body).toContain("complete ✅");
 
     api.state.prs[0].body = template;
-    expect(await update()).toEqual([{ number: 7, action: "updated", id: 900 }]);
+    expect(await update()).toMatchObject([
+      { number: 7, action: "updated", id: 900 },
+    ]);
     expect(await update()).toEqual([{ number: 7, action: "unchanged" }]);
     expect(api.state.comments.get(7)).toHaveLength(1);
     expect(api.writes().map(([, init]) => init!.method)).toEqual([
@@ -192,7 +237,7 @@ describe("sticky PR description feedback", () => {
         ...metadata,
         fetchImpl: api.fetchImpl,
       }),
-    ).toEqual([{ number: 7, action: "updated", id: 501 }]);
+    ).toMatchObject([{ number: 7, action: "updated", id: 501 }]);
     expect(
       api.fetchImpl.mock.calls.some(([url]) =>
         url.endsWith("/issues/7/comments?per_page=100&page=2"),
@@ -226,7 +271,7 @@ describe("sticky PR description feedback", () => {
         ...metadata,
         fetchImpl: api.fetchImpl,
       }),
-    ).toEqual([{ number: 7, action: "created", id: 900 }]);
+    ).toMatchObject([{ number: 7, action: "created", id: 900 }]);
     expect(api.state.comments.get(7)).toHaveLength(3);
   });
 
@@ -237,16 +282,18 @@ describe("sticky PR description feedback", () => {
       if (change === "body") changed.body = completed;
       if (change === "head") changed.head.sha = "b".repeat(40);
       if (change === "closed") changed.state = "closed";
-      const fetchImpl = vi
-        .fn()
-        .mockResolvedValueOnce(response([pr()]))
-        .mockResolvedValueOnce(response(pr()))
-        .mockResolvedValueOnce(response([]))
-        .mockResolvedValueOnce(response(changed));
+      const api = fakeGitHub();
+      const actualFetch = api.fetchImpl.getMockImplementation()!;
+      let reads = 0;
+      const fetchImpl = vi.fn(async (input: string, init: RequestInit = {}) => {
+        if (new URL(input).pathname.endsWith("/pulls/7") && ++reads > 1)
+          return response(changed);
+        return actualFetch(input, init);
+      });
       expect(
         await updateDescriptionComments({ ...metadata, fetchImpl }),
       ).toEqual([{ number: 7, action: "stale" }]);
-      expect(fetchImpl).toHaveBeenCalledTimes(4);
+      expect(reads).toBe(2);
       expect(fetchImpl.mock.calls.every(([, init]) => !init.method)).toBe(true);
     },
   );
@@ -267,28 +314,25 @@ describe("sticky PR description feedback", () => {
   it.each(["HTTP 403", "HTTP 500", "timeout"])(
     "fails on a %s POST without retrying an ambiguous creation",
     async (failure) => {
-      const fetchImpl = vi
-        .fn()
-        .mockResolvedValueOnce(response([pr()]))
-        .mockResolvedValueOnce(response(pr()))
-        .mockResolvedValueOnce(response([]))
-        .mockResolvedValueOnce(response(pr()));
-      if (failure === "timeout")
-        fetchImpl.mockRejectedValueOnce(
-          new DOMException("Timed out", "TimeoutError"),
-        );
-      else
-        fetchImpl.mockResolvedValueOnce({
-          ok: false,
-          status: Number(failure.slice(5)),
-        });
+      const api = fakeGitHub();
+      const actualFetch = api.fetchImpl.getMockImplementation()!;
+      const fetchImpl = vi.fn(async (input: string, init: RequestInit = {}) => {
+        if (input.endsWith("/issues/7/comments") && init.method === "POST") {
+          if (failure === "timeout")
+            throw new DOMException("Timed out", "TimeoutError");
+          return { ok: false, status: Number(failure.slice(5)) };
+        }
+        return actualFetch(input, init);
+      });
 
       await expect(
         updateDescriptionComments({ ...metadata, fetchImpl }),
       ).rejects.toThrow(failure === "timeout" ? "Timed out" : failure);
-      expect(fetchImpl).toHaveBeenCalledTimes(5);
       expect(
-        fetchImpl.mock.calls.filter(([, init]) => init.method === "POST"),
+        fetchImpl.mock.calls.filter(
+          ([url, init]) =>
+            url.endsWith("/issues/7/comments") && init.method === "POST",
+        ),
       ).toHaveLength(1);
     },
   );
@@ -298,7 +342,7 @@ describe("sticky PR description feedback", () => {
     const actualFetch = api.fetchImpl.getMockImplementation()!;
     api.fetchImpl.mockImplementation(async (input, init = {}) => {
       const result = await actualFetch(input, init);
-      if (init.method === "POST")
+      if (input.endsWith("/issues/7/comments") && init.method === "POST")
         throw new Error("Response lost after creation");
       return result;
     });
@@ -311,7 +355,7 @@ describe("sticky PR description feedback", () => {
         ...metadata,
         fetchImpl: api.fetchImpl,
       }),
-    ).toEqual([{ number: 7, action: "unchanged" }]);
+    ).toMatchObject([{ number: 7, action: "unchanged" }]);
     expect(api.writes()).toHaveLength(1);
   });
 
@@ -336,7 +380,7 @@ describe("workflow-run PR identification", () => {
         ...metadata,
         fetchImpl: api.fetchImpl,
       }),
-    ).toEqual([{ number: 7, action: "created", id: 900 }]);
+    ).toMatchObject([{ number: 7, action: "created", id: 900 }]);
     const url = new URL(api.fetchImpl.mock.calls[0][0]);
     expect(url.searchParams.get("head")).toBe("contributor:feature/feedback");
     expect(url.searchParams.get("state")).toBe("open");
@@ -407,7 +451,7 @@ describe("workflow-run PR identification", () => {
         ...metadata,
         fetchImpl: api.fetchImpl,
       }),
-    ).toEqual([{ number: 7, action: "created", id: 900 }]);
+    ).toMatchObject([{ number: 7, action: "created", id: 900 }]);
   });
 
   it("updates every matching open PR for the same source branch and SHA", async () => {
@@ -417,7 +461,7 @@ describe("workflow-run PR identification", () => {
         ...metadata,
         fetchImpl: api.fetchImpl,
       }),
-    ).toEqual([
+    ).toMatchObject([
       { number: 7, action: "created", id: 900 },
       { number: 8, action: "unchanged" },
       { number: 9, action: "created", id: 901 },
@@ -439,7 +483,7 @@ describe("workflow-run PR identification", () => {
         ...metadata,
         fetchImpl: api.fetchImpl,
       }),
-    ).toEqual([{ number: 7, action: "created", id: 900 }]);
+    ).toMatchObject([{ number: 7, action: "created", id: 900 }]);
     const searchCalls = api.fetchImpl.mock.calls
       .map(([url]) => new URL(url))
       .filter((url) => url.pathname.endsWith("/pulls"));
