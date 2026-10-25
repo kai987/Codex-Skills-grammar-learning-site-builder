@@ -530,6 +530,7 @@ describe("trusted notification workflow", () => {
     const sources = workflow.match(/workflows:[\s\S]*?types:/)?.[0];
     expect(sources).toContain("PR description");
     expect(sources).toContain("PR description label recheck");
+    expect(sources).toContain("PR description lifecycle");
     expect(workflow).toContain("types: [completed]");
     expect(workflow).toContain(
       "if: github.event.workflow_run.event == 'pull_request'",
@@ -555,20 +556,22 @@ describe("trusted notification workflow", () => {
     for (const action of actions) expect(action[2]).toMatch(/^[a-f\d]{40}$/);
   });
 
-  it("serializes all writers for one source branch without cancelling an in-flight POST", () => {
+  it("serializes open and terminal writers for the repository without cancelling an in-flight POST", () => {
     const workflow = readFileSync(
       ".github/workflows/pr-description-comment.yml",
       "utf8",
     );
     expect(workflow).toContain(
-      "group: pr-description-feedback-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}",
+      "group: pr-description-feedback-${{ github.repository_id }}",
     );
     expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).toContain("queue: max");
     const group = workflow
       .split("\n")
       .find((line) => line.trim().startsWith("group:"))!;
-    expect(group).not.toMatch(/head_sha|run_id|run_attempt/);
+    expect(group).not.toMatch(
+      /head_sha|run_id|run_attempt|head_branch|head_repository/,
+    );
   });
 
   it("rejects a CLI invocation outside workflow_run without using a token", () => {

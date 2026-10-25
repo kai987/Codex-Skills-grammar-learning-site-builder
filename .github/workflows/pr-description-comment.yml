@@ -2,7 +2,8 @@ name: PR description feedback
 
 on:
   workflow_run:
-    workflows: [PR description, PR description label recheck]
+    workflows:
+      [PR description, PR description label recheck, PR description lifecycle]
     types: [completed]
 
 permissions:
@@ -10,11 +11,12 @@ permissions:
   pull-requests: write
   actions: read
 
-# Serialize writers for this PR branch. Do not cancel an in-flight POST: the
+# Serialize all feedback writers, including close/merge runs on the base ref
+# and runs with a deleted fork. Do not cancel an in-flight POST: the
 # request may have created a comment even if its response has not arrived yet.
 # Keep pending events queued rather than replacing a relevant pending writer.
 concurrency:
-  group: pr-description-feedback-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+  group: pr-description-feedback-${{ github.repository_id }}
   queue: max
   cancel-in-progress: false
 
