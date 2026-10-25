@@ -9,6 +9,7 @@ import {
 
 export const commentMarker =
   "<!-- grammar-learning-site-builder:pr-description -->";
+export const descriptionLabel = "needs-description";
 
 export function renderDescriptionComment(errors, repository, number) {
   const checks = `https://github.com/${repository}/pull/${number}/checks`;
@@ -53,20 +54,24 @@ export async function updateDescriptionComments({
 
   const request = async (route, method, body) => {
     const response = await fetchImpl(`${apiUrl}/repos/${repository}${route}`, {
-      ...(method ? { method, body: JSON.stringify(body) } : {}),
+      ...(method ? { method } : {}),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
         "X-GitHub-Api-Version": "2022-11-28",
-        ...(method ? { "Content-Type": "application/json" } : {}),
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       signal: AbortSignal.timeout(15000),
     });
-    if (!response.ok)
-      throw new Error(
+    if (!response.ok) {
+      const error = new Error(
         `PR feedback API request failed (HTTP ${response.status}).`,
       );
-    return response.json();
+      error.status = response.status;
+      throw error;
+    }
+    return response.status === 204 ? undefined : response.json();
   };
   const list = async (route) => {
     const result = [];
@@ -78,6 +83,40 @@ export async function updateDescriptionComments({
         throw new Error("Invalid paginated GitHub API response.");
       result.push(...items);
       if (items.length < 100) return result;
+    }
+  };
+
+  const isDescriptionLabel = (label) =>
+    label?.name?.toLowerCase() === descriptionLabel;
+  const ensureRepositoryLabel = async () => {
+    const route = `/labels/${encodeURIComponent(descriptionLabel)}`;
+    const check = (label) => {
+      if (!isDescriptionLabel(label))
+        throw new Error("Invalid needs-description repository label response.");
+      if (label.archived_at)
+        throw new Error(
+          "The needs-description label is archived; it cannot be added to PRs.",
+        );
+    };
+    try {
+      check(await request(route));
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      try {
+        check(
+          await request("/labels", "POST", {
+            name: descriptionLabel,
+            color: "fbca04",
+            description:
+              "PR description needs required changes, validation results, or confirmations.",
+          }),
+        );
+      } catch (creationError) {
+        // Another PR's writer can create the same repository label in parallel.
+        // Confirm it exists; never overwrite its metadata or blindly retry POST.
+        if (creationError.status !== 422) throw creationError;
+        check(await request(route));
+      }
     }
   };
 
@@ -114,27 +153,77 @@ export async function updateDescriptionComments({
         comment.body.startsWith(`${commentMarker}\n`),
     );
 
-    // Do not post a success comment on a PR that has never needed feedback.
-    if ((!existing && !errors.length) || existing?.body === body) {
-      results.push({ number: pr.number, action: "unchanged" });
+    const labels = await list(`/issues/${pr.number}/labels`);
+    const hasDescriptionLabel = labels.some(isDescriptionLabel);
+    const labelChange = errors.length
+      ? !hasDescriptionLabel
+      : hasDescriptionLabel;
+    const commentChange = existing ? existing.body !== body : errors.length > 0;
+    const result = { number: pr.number, action: "unchanged" };
+
+    // Comment deduplication must not prevent label repair (or removal on an
+    // initially complete PR that has never needed a feedback comment).
+    if (!commentChange && !labelChange) {
+      results.push(result);
       continue;
     }
-    const latest = await request(`/pulls/${pr.number}`);
-    if (!isCurrentPR(latest) || latest.body !== pr.body) {
-      results.push({ number: pr.number, action: "stale" });
+    const stillCurrent = async () => {
+      const latest = await request(`/pulls/${pr.number}`);
+      return (
+        isCurrentPR(latest) &&
+        latest.number === pr.number &&
+        latest.body === pr.body
+      );
+    };
+
+    if (!(await stillCurrent())) {
+      results.push({ ...result, action: "stale" });
       continue;
+    }
+    if (labelChange) {
+      if (errors.length) await ensureRepositoryLabel();
+      // Repository-label preparation may take time. Recheck immediately before
+      // each PR mutation, not just before creating the repository definition.
+      if (!(await stillCurrent())) {
+        results.push({ ...result, action: "stale" });
+        continue;
+      }
+      if (errors.length) {
+        await request(`/issues/${pr.number}/labels`, "POST", {
+          labels: [descriptionLabel],
+        });
+        result.label = "added";
+      } else {
+        try {
+          await request(
+            `/issues/${pr.number}/labels/${encodeURIComponent(descriptionLabel)}`,
+            "DELETE",
+          );
+        } catch (error) {
+          // A concurrent manual removal is already the desired state. A 404
+          // alone is not proof: also verify the PR's current labels are clear.
+          if (error.status !== 404) throw error;
+          const currentLabels = await list(`/issues/${pr.number}/labels`);
+          if (currentLabels.some(isDescriptionLabel)) throw error;
+        }
+        result.label = "removed";
+      }
     }
 
-    // Never automatically retry POST: a timeout/5xx can hide a successful
-    // creation. A rerun starts with a fresh, paginated comment lookup instead.
-    const saved = existing
-      ? await request(`/issues/comments/${existing.id}`, "PATCH", { body })
-      : await request(`/issues/${pr.number}/comments`, "POST", { body });
-    results.push({
-      number: pr.number,
-      action: existing ? "updated" : "created",
-      id: saved.id,
-    });
+    if (commentChange) {
+      if (!(await stillCurrent())) {
+        results.push({ ...result, action: "stale" });
+        continue;
+      }
+      // Never automatically retry comment POST: a timeout/5xx can hide a
+      // successful creation. A rerun starts with a fresh comment lookup.
+      const saved = existing
+        ? await request(`/issues/comments/${existing.id}`, "PATCH", { body })
+        : await request(`/issues/${pr.number}/comments`, "POST", { body });
+      result.action = existing ? "updated" : "created";
+      result.id = saved.id;
+    }
+    results.push(result);
   }
   return results;
 }
