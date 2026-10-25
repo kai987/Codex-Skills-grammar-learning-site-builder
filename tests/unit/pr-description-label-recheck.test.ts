@@ -405,7 +405,7 @@ describe("manual label recheck workflow safety", () => {
     expect(workflow).not.toContain("pr-description-label-recheck");
   });
 
-  it("funnels both sources into the same trusted serialized writer with only read access to job evidence", () => {
+  it("funnels all sources into the same trusted repository-serialized writer with read-only job evidence", () => {
     const workflow = readFileSync(
       ".github/workflows/pr-description-comment.yml",
       "utf8",
@@ -413,13 +413,14 @@ describe("manual label recheck workflow safety", () => {
     const sources = workflow.match(/workflows:[\s\S]*?types:/)?.[0];
     expect(sources).toContain("PR description");
     expect(sources).toContain("PR description label recheck");
+    expect(sources).toContain("PR description lifecycle");
     expect(workflow).toMatch(/^  actions: read$/m);
     expect(workflow).toMatch(/^  contents: read$/m);
     expect(workflow).toMatch(/^  pull-requests: write$/m);
     expect(workflow).not.toMatch(/^\s*(?:contents|issues|actions): write$/m);
     expect(workflow).toContain("ref: ${{ github.sha }}");
     expect(workflow).toContain(
-      "group: pr-description-feedback-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}",
+      "group: pr-description-feedback-${{ github.repository_id }}",
     );
     expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).toContain("queue: max");

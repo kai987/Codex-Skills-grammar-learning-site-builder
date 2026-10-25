@@ -65,9 +65,25 @@ Rechecks do not cancel one another. Feedback writes remain serialized, with
 GitHub's bounded queue of up to 100 pending runs instead of replacing a pending
 run when another event arrives.
 
+Closing or merging a PR starts the permission-free `PR description lifecycle`
+signal workflow. Trusted feedback then removes only `needs-description` and
+updates the original bot comment to **closed** or **merged** using the current
+GitHub state. It preserves other labels, creates no new terminal comment, and
+does not repeat identical updates. Reopening the PR lets the original checks
+restore normal feedback and label state.
+
+Lifecycle cleanup verifies the exact source job and matches live closed PRs
+by repository and head/merge commit, including deleted forks and missing PR
+association lists. All writers share one repository-level queue so delayed
+open-PR checks cannot race close/merge cleanup. Reopened or changed PRs are
+rechecked before each write. No PR-controlled text or code authorizes cleanup.
+
 GitHub may require approval for a fork's first workflow run, and `pull_request`
 workflows do not run while the PR has merge conflicts. Resolve conflicts or
 approve the run, then rerun the label recheck if needed.
+GitHub does not deliver new `closed` workflow runs for closures made with a
+workflow's `GITHUB_TOKEN`. Use the UI, a user/App token, or rerun a previously
+delivered lifecycle run when automated closure needs this cleanup.
 
 The writer uses only trusted default-branch code and limited PR write permission
 (plus read-only Actions access to verify recheck job results),
