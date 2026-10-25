@@ -216,6 +216,36 @@ describe("attempt-scoped source job evidence", () => {
     "action_required",
     "startup_failure",
     "stale",
+  ])(
+    "ignores parent workflow conclusion %s before reading eventually visible jobs",
+    async (conclusion) => {
+      const api = fakeGitHub();
+      api.state.jobs = [];
+      expect(await api.update({ ...run, conclusion })).toEqual([]);
+      expect(api.fetchImpl).not.toHaveBeenCalled();
+      expect(api.writes()).toEqual([]);
+    },
+  );
+
+  it.each([{ id: 0 }, { run_attempt: 0 }])(
+    "still validates run identity before skipping an inconclusive parent: %j",
+    async (override) => {
+      const api = fakeGitHub();
+      await expect(
+        api.update({ ...run, conclusion: "skipped", ...override }),
+      ).rejects.toThrow("run ID or attempt");
+      expect(api.fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "skipped",
+    "cancelled",
+    "neutral",
+    "timed_out",
+    "action_required",
+    "startup_failure",
+    "stale",
     null,
   ])(
     "ignores a non-executed or inconclusive source job: %s",

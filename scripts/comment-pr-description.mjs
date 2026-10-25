@@ -146,6 +146,21 @@ export async function updateDescriptionComments({
   };
 
   if (isLabelRecheck || isLifecycle) {
+    // An explicitly skipped/cancelled source cannot authorize any writes. Its
+    // jobs may not be indexed yet when workflow_run arrives; do not fetch them
+    // and mistake an empty, eventually consistent list for a broken workflow.
+    if (
+      [
+        "skipped",
+        "cancelled",
+        "neutral",
+        "timed_out",
+        "action_required",
+        "startup_failure",
+        "stale",
+      ].includes(run.conclusion)
+    )
+      return [];
     // A skipped optional job still gives its workflow a successful conclusion.
     // Inspect this exact attempt, not just the workflow conclusion, so other
     // labels/bot events never reach PR mutations or overwrite feedback.
