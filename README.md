@@ -71,6 +71,8 @@ updates the original bot comment to **closed** or **merged** using the current
 GitHub state. It preserves other labels, creates no new terminal comment, and
 does not repeat identical updates. Reopening the PR lets the original checks
 restore normal feedback and label state.
+Explicitly skipped or cancelled source runs never write feedback; their job
+metadata does not need to be available before they can be safely ignored.
 
 Lifecycle cleanup verifies the exact source job and matches live closed PRs
 by repository and head/merge commit, including deleted forks and missing PR
