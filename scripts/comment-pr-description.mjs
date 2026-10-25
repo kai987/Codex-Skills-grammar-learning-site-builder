@@ -34,14 +34,21 @@ export async function updateDescriptionComments({
   fetchImpl = fetch,
 }) {
   const repoPattern = /^[\w.-]+\/[\w.-]+$/;
+  const sourcePaths = new Map([
+    ["PR description", ".github/workflows/pr-description.yml"],
+    [
+      "PR description label recheck",
+      ".github/workflows/pr-description-label-recheck.yml",
+    ],
+  ]);
   if (
     !repoPattern.test(repository ?? "") ||
     !token ||
     !apiUrl.startsWith("https://") ||
-    run?.name !== "PR description" ||
+    !sourcePaths.has(run?.name) ||
     run?.event !== "pull_request" ||
     run?.status !== "completed" ||
-    run?.path !== ".github/workflows/pr-description.yml" ||
+    run?.path !== sourcePaths.get(run?.name) ||
     run?.repository?.full_name?.toLowerCase() !== repository.toLowerCase() ||
     !repoPattern.test(run?.head_repository?.full_name ?? "") ||
     typeof run?.head_branch !== "string" ||
@@ -51,6 +58,25 @@ export async function updateDescriptionComments({
     throw new Error(
       "Missing or invalid description workflow-run metadata or token.",
     );
+
+  const isLabelRecheck = run.name === "PR description label recheck";
+  if (isLabelRecheck) {
+    const isHuman = (actor) =>
+      actor?.type === "User" &&
+      typeof actor.login === "string" &&
+      actor.login.length > 0 &&
+      !/\[bot\]$/i.test(actor.login);
+    // Check both identities: rerunning a human's event as a bot must not turn
+    // that event into another write-capable feedback cycle.
+    if (!isHuman(run.actor) || !isHuman(run.triggering_actor)) return [];
+    if (
+      !Number.isSafeInteger(run.id) ||
+      run.id < 1 ||
+      !Number.isSafeInteger(run.run_attempt) ||
+      run.run_attempt < 1
+    )
+      throw new Error("Missing or invalid label-recheck run ID or attempt.");
+  }
 
   const request = async (route, method, body) => {
     const response = await fetchImpl(`${apiUrl}/repos/${repository}${route}`, {
@@ -73,18 +99,50 @@ export async function updateDescriptionComments({
     }
     return response.status === 204 ? undefined : response.json();
   };
-  const list = async (route) => {
+  const list = async (route, key) => {
     const result = [];
     for (let page = 1; ; page++) {
-      const items = await request(
+      const data = await request(
         `${route}${route.includes("?") ? "&" : "?"}per_page=100&page=${page}`,
       );
+      const items = key ? data?.[key] : data;
       if (!Array.isArray(items))
         throw new Error("Invalid paginated GitHub API response.");
       result.push(...items);
       if (items.length < 100) return result;
     }
   };
+
+  if (isLabelRecheck) {
+    // A skipped optional job still gives its workflow a successful conclusion.
+    // Inspect this exact attempt, not just the workflow conclusion, so other
+    // labels/bot events never reach PR mutations or overwrite feedback.
+    const jobs = await list(
+      `/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`,
+      "jobs",
+    );
+    const matches = jobs.filter(
+      (job) => job?.name === "pr-description-label-recheck",
+    );
+    if (matches.length !== 1)
+      throw new Error(
+        "Expected exactly one label-recheck job in the source attempt.",
+      );
+    const job = matches[0];
+    if (
+      job.run_id !== run.id ||
+      job.run_attempt !== run.run_attempt ||
+      job.head_sha !== run.head_sha
+    )
+      throw new Error(
+        "Label-recheck job does not match its source run, attempt, and HEAD.",
+      );
+    if (
+      job.status !== "completed" ||
+      !["success", "failure"].includes(job.conclusion)
+    )
+      return [];
+  }
 
   const isDescriptionLabel = (label) =>
     label?.name?.toLowerCase() === descriptionLabel;

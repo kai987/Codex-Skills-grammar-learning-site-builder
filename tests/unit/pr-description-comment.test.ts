@@ -527,12 +527,16 @@ describe("trusted notification workflow", () => {
       "utf8",
     );
     expect(workflow).toContain("workflow_run:");
-    expect(workflow).toContain("workflows: [PR description]");
+    const sources = workflow.match(/workflows:[\s\S]*?types:/)?.[0];
+    expect(sources).toContain("PR description");
+    expect(sources).toContain("PR description label recheck");
     expect(workflow).toContain("types: [completed]");
     expect(workflow).toContain(
       "if: github.event.workflow_run.event == 'pull_request'",
     );
-    expect(workflow).toContain("contents: read\n  pull-requests: write");
+    expect(workflow).toMatch(/^  contents: read$/m);
+    expect(workflow).toMatch(/^  pull-requests: write$/m);
+    expect(workflow).toMatch(/^  actions: read$/m);
     expect(workflow).toContain("repository: ${{ github.repository }}");
     expect(workflow).toContain("ref: ${{ github.sha }}");
     expect(workflow).toContain("persist-credentials: false");
@@ -560,6 +564,7 @@ describe("trusted notification workflow", () => {
       "group: pr-description-feedback-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}",
     );
     expect(workflow).toContain("cancel-in-progress: false");
+    expect(workflow).toContain("queue: max");
     const group = workflow
       .split("\n")
       .find((line) => line.trim().startsWith("group:"))!;
