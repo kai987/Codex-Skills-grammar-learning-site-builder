@@ -74,18 +74,46 @@ restore normal feedback and label state.
 Explicitly skipped or cancelled source runs never write feedback; their job
 metadata does not need to be available before they can be safely ignored.
 
-Lifecycle cleanup verifies the exact source job and matches live closed PRs
+Event-driven lifecycle cleanup verifies the exact source job and matches live closed PRs
 by repository and head/merge commit, including deleted forks and missing PR
 association lists. All writers share one repository-level queue so delayed
 open-PR checks cannot race close/merge cleanup. Reopened or changed PRs are
 rechecked before each write. No PR-controlled text or code authorizes cleanup.
 
+The same [`PR description feedback` workflow](https://github.com/kai987/Codex-Skills-grammar-learning-site-builder/actions/workflows/pr-description-comment.yml)
+also runs every hour at minute **17 (UTC)** to recover missed close/merge
+notifications, including those suppressed when `GITHUB_TOKEN` closes or merges
+a PR. It scans all pages of closed PRs, including merged PRs and deleted forks,
+without a time cutoff or a `needs-description` label filter. This also repairs
+an outdated comment after the label has already been removed. It uses current
+GitHub state, removes only `needs-description`, and updates only the existing
+feedback comment to **closed** or **merged**; other labels remain untouched.
+No original comment means no new terminal comment, and unchanged results cause
+no writes. The sweep shares the event-driven writer's queue and rechecks each
+PR's identity and terminal state before every write, skipping reopened or
+changed PRs. An API failure for one PR does not prevent the remaining PRs from
+being checked, but fails the overall run visibly so a later sweep can retry.
+
+For an immediate catch-up, open that workflow in Actions, select **Run workflow**
+with the default branch (`main`), or run:
+
+```bash
+gh workflow run pr-description-comment.yml --ref main
+```
+
+The manual sweep accepts no PR inputs and runs only on the default branch.
+[GitHub schedules](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
+can be delayed or dropped during high load, so the hourly sweep is a fallback,
+not an exact completion deadline. Public repositories also have scheduled
+workflows disabled after 60 days without activity; re-enable this workflow in
+Actions before starting a manual catch-up if that happens.
+
 GitHub may require approval for a fork's first workflow run, and `pull_request`
 workflows do not run while the PR has merge conflicts. Resolve conflicts or
 approve the run, then rerun the label recheck if needed.
-GitHub does not deliver new `closed` workflow runs for closures made with a
-workflow's `GITHUB_TOKEN`. Use the UI, a user/App token, or rerun a previously
-delivered lifecycle run when automated closure needs this cleanup.
+The default-branch sweep does not depend on delivery of a `closed` event or a
+successful PR workflow, so it can clean up missed terminal feedback in these
+cases too. It does not change the checks required while a PR is open.
 
 The writer uses only trusted default-branch code and limited PR write permission
 (plus read-only Actions access to verify recheck job results),

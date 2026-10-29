@@ -10,6 +10,70 @@ import {
 export const commentMarker =
   "<!-- grammar-learning-site-builder:pr-description -->";
 export const descriptionLabel = "needs-description";
+const repoPattern = /^[\w.-]+\/[\w.-]+$/;
+
+const isDescriptionLabel = (label) =>
+  label?.name?.toLowerCase() === descriptionLabel;
+
+function createFeedbackClient({ repository, token, apiUrl, fetchImpl }) {
+  if (
+    !repoPattern.test(repository ?? "") ||
+    !token ||
+    typeof apiUrl !== "string" ||
+    !apiUrl.startsWith("https://")
+  )
+    throw new Error(
+      "Missing or invalid PR feedback repository, API URL, or token.",
+    );
+
+  const request = async (route, method, body) => {
+    const response = await fetchImpl(`${apiUrl}/repos/${repository}${route}`, {
+      ...(method ? { method } : {}),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) {
+      const error = new Error(
+        `PR feedback API request failed (HTTP ${response.status}).`,
+      );
+      error.status = response.status;
+      throw error;
+    }
+    return response.status === 204 ? undefined : response.json();
+  };
+  const list = async (route, key) => {
+    const result = [];
+    for (let page = 1; ; page++) {
+      const data = await request(
+        `${route}${route.includes("?") ? "&" : "?"}per_page=100&page=${page}`,
+      );
+      const items = key ? data?.[key] : data;
+      if (!Array.isArray(items))
+        throw new Error("Invalid paginated GitHub API response.");
+      result.push(...items);
+      if (items.length < 100) return result;
+    }
+  };
+  const removeDescriptionLabel = async (number) => {
+    try {
+      await request(
+        `/issues/${number}/labels/${encodeURIComponent(descriptionLabel)}`,
+        "DELETE",
+      );
+    } catch (error) {
+      if (error.status !== 404) throw error;
+      const labels = await list(`/issues/${number}/labels`);
+      if (labels.some(isDescriptionLabel)) throw error;
+    }
+  };
+  return { request, list, removeDescriptionLabel };
+}
 
 export function renderTerminalDescriptionComment(status) {
   if (status === "merged")
@@ -28,6 +92,114 @@ function isFeedbackComment(comment) {
     typeof comment.body === "string" &&
     comment.body.startsWith(`${commentMarker}\n`)
   );
+}
+
+function terminalStatus(pr) {
+  if (typeof pr.merged !== "boolean")
+    throw new Error("Cannot determine whether the closed PR was merged.");
+  return pr.merged ? "merged" : "closed";
+}
+
+async function updateTerminalDescriptionComment(client, pr, isBoundTerminalPR) {
+  const { request, list, removeDescriptionLabel } = client;
+  const status = terminalStatus(pr);
+  const body = renderTerminalDescriptionComment(status);
+  const comments = await list(`/issues/${pr.number}/comments`);
+  const existing = comments.find(isFeedbackComment);
+  const labels = await list(`/issues/${pr.number}/labels`);
+  const labelChange = labels.some(isDescriptionLabel);
+  // Never create a terminal comment when there was no original feedback.
+  const commentChange = existing && existing.body !== body;
+  const result = { number: pr.number, action: "unchanged" };
+  const stillTerminal = async () => {
+    const latest = await request(`/pulls/${pr.number}`);
+    return (
+      latest.number === pr.number &&
+      isBoundTerminalPR(latest) &&
+      terminalStatus(latest) === status
+    );
+  };
+  if (labelChange) {
+    if (!(await stillTerminal())) return { ...result, action: "stale" };
+    await removeDescriptionLabel(pr.number);
+    result.label = "removed";
+  }
+  if (commentChange) {
+    if (!(await stillTerminal())) return { ...result, action: "stale" };
+    await request(`/issues/comments/${existing.id}`, "PATCH", { body });
+    result.action = "updated";
+    result.id = existing.id;
+  }
+  return result;
+}
+
+export async function reconcileClosedDescriptionComments({
+  repository,
+  token,
+  apiUrl = "https://api.github.com",
+  fetchImpl = fetch,
+}) {
+  const client = createFeedbackClient({ repository, token, apiUrl, fetchImpl });
+  const isClosedPR = (pr) =>
+    Number.isSafeInteger(pr?.number) &&
+    pr.number > 0 &&
+    pr.state === "closed" &&
+    pr.base?.repo?.full_name?.toLowerCase() === repository.toLowerCase();
+  // No label filter or age cutoff: a lost PATCH can leave only an old comment
+  // to repair. The default-branch schedule needs no PR event or source run.
+  const candidates = await client.list(
+    "/pulls?state=closed&sort=updated&direction=desc",
+  );
+  const results = [];
+  const errors = [];
+  const seen = new Set();
+  for (const candidate of candidates.filter(isClosedPR)) {
+    if (seen.has(candidate.number)) continue;
+    seen.add(candidate.number);
+    try {
+      const pr = await client.request(`/pulls/${candidate.number}`);
+      if (
+        pr.number !== candidate.number ||
+        !isClosedPR(pr) ||
+        !/^[a-f\d]{40}$/i.test(pr.head?.sha ?? "") ||
+        typeof pr.head?.ref !== "string" ||
+        !pr.head.ref ||
+        typeof pr.base?.ref !== "string" ||
+        !pr.base.ref ||
+        (pr.head?.repo != null &&
+          !repoPattern.test(pr.head.repo.full_name ?? ""))
+      )
+        continue;
+      // Pin the live identity, including the closure epoch. Reopening and
+      // closing again must not let a stale sweep overwrite newer feedback.
+      const stillSamePR = (latest) =>
+        isClosedPR(latest) &&
+        latest.head?.sha === pr.head.sha &&
+        latest.head?.ref === pr.head.ref &&
+        latest.head?.repo?.full_name?.toLowerCase() ===
+          pr.head?.repo?.full_name?.toLowerCase() &&
+        latest.base?.ref === pr.base.ref &&
+        latest.merge_commit_sha === pr.merge_commit_sha &&
+        latest.closed_at === pr.closed_at;
+      results.push(
+        await updateTerminalDescriptionComment(client, pr, stillSamePR),
+      );
+    } catch (error) {
+      // One inaccessible PR must not starve every other missed closure. Mark
+      // the run failed after attempting the rest; the next sweep can retry.
+      errors.push(
+        new Error(`PR #${candidate.number}: ${error.message}`, {
+          cause: error,
+        }),
+      );
+    }
+  }
+  if (errors.length)
+    throw new AggregateError(
+      errors,
+      `Closed PR feedback reconciliation failed for ${errors.length} PR(s): ${errors.map((error) => error.message).join("; ")}`,
+    );
+  return results;
 }
 
 export function renderDescriptionComment(errors, repository, number) {
@@ -52,7 +224,6 @@ export async function updateDescriptionComments({
   apiUrl = "https://api.github.com",
   fetchImpl = fetch,
 }) {
-  const repoPattern = /^[\w.-]+\/[\w.-]+$/;
   const isLifecycle = run?.name === "PR description lifecycle";
   const validHeadRepo = repoPattern.test(run?.head_repository?.full_name ?? "");
   const validHeadBranch =
@@ -110,40 +281,8 @@ export async function updateDescriptionComments({
       );
   }
 
-  const request = async (route, method, body) => {
-    const response = await fetchImpl(`${apiUrl}/repos/${repository}${route}`, {
-      ...(method ? { method } : {}),
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${token}`,
-        "X-GitHub-Api-Version": "2022-11-28",
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!response.ok) {
-      const error = new Error(
-        `PR feedback API request failed (HTTP ${response.status}).`,
-      );
-      error.status = response.status;
-      throw error;
-    }
-    return response.status === 204 ? undefined : response.json();
-  };
-  const list = async (route, key) => {
-    const result = [];
-    for (let page = 1; ; page++) {
-      const data = await request(
-        `${route}${route.includes("?") ? "&" : "?"}per_page=100&page=${page}`,
-      );
-      const items = key ? data?.[key] : data;
-      if (!Array.isArray(items))
-        throw new Error("Invalid paginated GitHub API response.");
-      result.push(...items);
-      if (items.length < 100) return result;
-    }
-  };
+  const client = createFeedbackClient({ repository, token, apiUrl, fetchImpl });
+  const { request, list, removeDescriptionLabel } = client;
 
   if (isLabelRecheck || isLifecycle) {
     // An explicitly skipped/cancelled source cannot authorize any writes. Its
@@ -192,8 +331,6 @@ export async function updateDescriptionComments({
       return [];
   }
 
-  const isDescriptionLabel = (label) =>
-    label?.name?.toLowerCase() === descriptionLabel;
   const ensureRepositoryLabel = async () => {
     const route = `/labels/${encodeURIComponent(descriptionLabel)}`;
     const check = (label) => {
@@ -226,19 +363,6 @@ export async function updateDescriptionComments({
     }
   };
 
-  const removeDescriptionLabel = async (number) => {
-    try {
-      await request(
-        `/issues/${number}/labels/${encodeURIComponent(descriptionLabel)}`,
-        "DELETE",
-      );
-    } catch (error) {
-      if (error.status !== 404) throw error;
-      const labels = await list(`/issues/${number}/labels`);
-      if (labels.some(isDescriptionLabel)) throw error;
-    }
-  };
-
   if (isLifecycle) {
     const sourceRepo = run.head_repository?.full_name?.toLowerCase();
     const isBoundTerminalPR = (pr) => {
@@ -264,11 +388,6 @@ export async function updateDescriptionComments({
         sourceRepo === repository.toLowerCase()
       );
     };
-    const terminalStatus = (pr) => {
-      if (typeof pr.merged !== "boolean")
-        throw new Error("Cannot determine whether the closed PR was merged.");
-      return pr.merged ? "merged" : "closed";
-    };
     // Closed, unmerged PRs can have empty run/check-suite/commit associations.
     // Bind live closed PRs by exact source head OR merge SHA instead of trusting
     // PR numbers or text from a PR-controlled workflow. Deleted forks are valid.
@@ -277,41 +396,9 @@ export async function updateDescriptionComments({
     for (const candidate of candidates.filter(isBoundTerminalPR)) {
       const pr = await request(`/pulls/${candidate.number}`);
       if (pr.number !== candidate.number || !isBoundTerminalPR(pr)) continue;
-      const status = terminalStatus(pr);
-      const body = renderTerminalDescriptionComment(status);
-      const comments = await list(`/issues/${pr.number}/comments`);
-      const existing = comments.find(isFeedbackComment);
-      const labels = await list(`/issues/${pr.number}/labels`);
-      const labelChange = labels.some(isDescriptionLabel);
-      // Never create a terminal comment when there was no original feedback.
-      const commentChange = existing && existing.body !== body;
-      const result = { number: pr.number, action: "unchanged" };
-      const stillTerminal = async () => {
-        const latest = await request(`/pulls/${pr.number}`);
-        return (
-          latest.number === pr.number &&
-          isBoundTerminalPR(latest) &&
-          terminalStatus(latest) === status
-        );
-      };
-      if (labelChange) {
-        if (!(await stillTerminal())) {
-          results.push({ ...result, action: "stale" });
-          continue;
-        }
-        await removeDescriptionLabel(pr.number);
-        result.label = "removed";
-      }
-      if (commentChange) {
-        if (!(await stillTerminal())) {
-          results.push({ ...result, action: "stale" });
-          continue;
-        }
-        await request(`/issues/comments/${existing.id}`, "PATCH", { body });
-        result.action = "updated";
-        result.id = existing.id;
-      }
-      results.push(result);
+      results.push(
+        await updateTerminalDescriptionComment(client, pr, isBoundTerminalPR),
+      );
     }
     return results;
   }
@@ -410,19 +497,39 @@ if (
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 ) {
   try {
-    if (process.env.GITHUB_EVENT_NAME !== "workflow_run")
+    const eventName = process.env.GITHUB_EVENT_NAME;
+    if (!["workflow_run", "schedule", "workflow_dispatch"].includes(eventName))
       throw new Error(
-        "PR feedback must run from the trusted workflow_run context.",
+        "PR feedback must run from a trusted workflow_run context or default-branch schedule/manual context.",
       );
     const event = JSON.parse(
       readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"),
     );
-    const result = await updateDescriptionComments({
+    const options = {
       repository: process.env.GITHUB_REPOSITORY,
       token: process.env.GITHUB_TOKEN,
-      run: event.workflow_run,
       apiUrl: process.env.GITHUB_API_URL,
-    });
+    };
+    let result;
+    if (eventName === "workflow_run") {
+      result = await updateDescriptionComments({
+        ...options,
+        run: event.workflow_run,
+      });
+    } else {
+      const defaultBranch = event.repository?.default_branch;
+      if (
+        typeof defaultBranch !== "string" ||
+        !defaultBranch ||
+        process.env.GITHUB_REF !== `refs/heads/${defaultBranch}` ||
+        event.repository?.full_name?.toLowerCase() !==
+          options.repository?.toLowerCase()
+      )
+        throw new Error(
+          "PR reconciliation must run on the repository's trusted default branch.",
+        );
+      result = await reconcileClosedDescriptionComments(options);
+    }
     console.log("PR description feedback:", JSON.stringify(result));
   } catch (error) {
     console.error("PR description feedback failed:", error.message);

@@ -521,7 +521,7 @@ describe("workflow-run PR identification", () => {
 });
 
 describe("trusted notification workflow", () => {
-  it("uses only the default-branch workflow-run context with minimal write permission", () => {
+  it("uses trusted workflow-run and default-branch sweep contexts with minimal write permission", () => {
     const workflow = readFileSync(
       ".github/workflows/pr-description-comment.yml",
       "utf8",
@@ -533,7 +533,15 @@ describe("trusted notification workflow", () => {
     expect(sources).toContain("PR description lifecycle");
     expect(workflow).toContain("types: [completed]");
     expect(workflow).toContain(
-      "if: github.event.workflow_run.event == 'pull_request'",
+      "github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'",
+    );
+    expect(workflow).toContain('cron: "17 * * * *"');
+    expect(workflow).toMatch(/^  workflow_dispatch:\s*$/m);
+    expect(workflow).not.toContain("inputs:");
+    expect(workflow).toContain("github.event_name == 'schedule'");
+    expect(workflow).toContain("github.event_name == 'workflow_dispatch'");
+    expect(workflow).toContain(
+      "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
     );
     expect(workflow).toMatch(/^  contents: read$/m);
     expect(workflow).toMatch(/^  pull-requests: write$/m);
@@ -556,7 +564,7 @@ describe("trusted notification workflow", () => {
     for (const action of actions) expect(action[2]).toMatch(/^[a-f\d]{40}$/);
   });
 
-  it("serializes open and terminal writers for the repository without cancelling an in-flight POST", () => {
+  it("serializes open, terminal, and scheduled writers for the repository without cancelling an in-flight POST", () => {
     const workflow = readFileSync(
       ".github/workflows/pr-description-comment.yml",
       "utf8",
