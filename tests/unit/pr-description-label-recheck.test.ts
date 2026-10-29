@@ -447,7 +447,9 @@ describe("manual label recheck workflow safety", () => {
     expect(workflow).toMatch(/^  actions: read$/m);
     expect(workflow).toMatch(/^  contents: read$/m);
     expect(workflow).toMatch(/^  pull-requests: write$/m);
-    expect(workflow).not.toMatch(/^\s*(?:contents|issues|actions): write$/m);
+    expect(workflow.split("\n  alert:\n")[0]).not.toMatch(
+      /^\s*(?:contents|issues|actions): write$/m,
+    );
     expect(workflow).toContain("ref: ${{ github.sha }}");
     expect(workflow).toContain(
       "group: pr-description-feedback-${{ github.repository_id }}",

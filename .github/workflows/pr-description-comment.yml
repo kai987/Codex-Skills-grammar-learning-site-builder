@@ -52,3 +52,38 @@ jobs:
         run: node scripts/comment-pr-description.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+  alert:
+    name: pr-cleanup-alert
+    needs: comment
+    # A separate job still runs when checkout, Node setup, or the sweep fails.
+    # Cancelled/skipped sweeps and ordinary PR feedback never change alerts.
+    if: >-
+      always() &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (needs.comment.result == 'success' || needs.comment.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out trusted default-branch alert code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      - name: Synchronize the persistent cleanup alert Issue
+        run: node scripts/alert-pr-cleanup.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_CLEANUP_RESULT: ${{ needs.comment.result }}
