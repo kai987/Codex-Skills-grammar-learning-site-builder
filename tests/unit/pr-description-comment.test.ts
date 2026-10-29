@@ -526,6 +526,7 @@ describe("trusted notification workflow", () => {
       ".github/workflows/pr-description-comment.yml",
       "utf8",
     );
+    const feedback = workflow.split("\n  alert:\n")[0];
     expect(workflow).toContain("workflow_run:");
     const sources = workflow.match(/workflows:[\s\S]*?types:/)?.[0];
     expect(sources).toContain("PR description");
@@ -551,7 +552,7 @@ describe("trusted notification workflow", () => {
     expect(workflow).toContain("persist-credentials: false");
     expect(workflow).toContain("package-manager-cache: false");
     expect(workflow).toContain("run: node scripts/comment-pr-description.mjs");
-    expect(workflow).not.toMatch(
+    expect(feedback).not.toMatch(
       /pull_request_target:|contents: write|issues: write|actions: write/,
     );
     expect(workflow).not.toMatch(/ref:.*(?:pull_request|workflow_run\.head)/);
@@ -559,7 +560,7 @@ describe("trusted notification workflow", () => {
     expect(workflow).not.toMatch(
       /uses:\s*actions\/download-artifact|cache:\s*npm/,
     );
-    const actions = [...workflow.matchAll(/uses:\s*([^\s]+)@([^\s]+)/g)];
+    const actions = [...feedback.matchAll(/uses:\s*([^\s]+)@([^\s]+)/g)];
     expect(actions).toHaveLength(2);
     for (const action of actions) expect(action[2]).toMatch(/^[a-f\d]{40}$/);
   });

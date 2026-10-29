@@ -112,6 +112,26 @@ states how many rows were omitted, and points to the step logs for the complete
 report. It includes no PR titles, bodies, or tokens. These summaries apply only
 to scheduled/manual sweeps; they add no PR comments or repository artifacts.
 
+Scheduled/manual sweeps also have a separate `pr-cleanup-alert` job that runs
+after the scan, including scan-job checkout, Node.js setup, or timeout failures.
+The first failure creates one bot-owned GitHub Issue. Later failures update
+that Issue's body without posting comments or adding mentions; the same event
+and content cause no extra write. A successful recovery updates and closes the
+Issue, and a later failure reopens that same Issue. Healthy runs with no alert,
+or an already recovered alert, make no Issue changes. Other Issues, labels,
+and assignees are preserved.
+
+The alert links to the latest failed run and recovery run, where the cleanup
+summary and job logs explain the result. It includes no raw exception text or
+PR content. Stored workflow run numbers and attempts prevent an old rerun from
+overwriting a newer failure or recovery already recorded in the Issue. This default-branch-only job has
+`contents: read` and `issues: write`; normal feedback permissions stay unchanged,
+and both jobs share the repository's serialized queue.
+Cancelled or skipped scans neither create nor resolve alerts. Workflow
+cancellation or a GitHub/Issue API outage can prevent delivery; an alert-job
+error remains visible in Actions, and a later sweep reconciles the Issue again.
+Alert delivery failures do not recursively create more alerts.
+
 For an immediate catch-up, open that workflow in Actions, select **Run workflow**
 with the default branch (`main`), or run:
 
@@ -133,7 +153,7 @@ The default-branch sweep does not depend on delivery of a `closed` event or a
 successful PR workflow, so it can clean up missed terminal feedback in these
 cases too. It does not change the checks required while a PR is open.
 
-The writer uses only trusted default-branch code and limited PR write permission
+The feedback writer uses only trusted default-branch code and limited PR write permission
 (plus read-only Actions access to verify recheck job results),
 not PR code, dependencies, or artifacts. It also handles fork PRs whose workflow
 metadata has no PR-number list. It does not replace the six required checks.
