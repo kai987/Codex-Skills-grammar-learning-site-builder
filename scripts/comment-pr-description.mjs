@@ -204,7 +204,9 @@ export async function reconcileClosedDescriptionComments({
     report.discoveryComplete = true;
   } catch (error) {
     report.scanError = reconciliationFailureReason(error);
-    throw error;
+    throw new Error(`PR discovery failed: ${report.scanError}`, {
+      cause: error,
+    });
   }
   const results = [];
   const errors = [];
