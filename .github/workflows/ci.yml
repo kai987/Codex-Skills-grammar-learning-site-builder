@@ -1,64 +1,19 @@
-name: CI
+name: PR cleanup acceptance
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+permissions: {}
 
 jobs:
-  generated-files:
-    name: generated-files
+  close-test-pr:
+    if: github.ref == 'refs/heads/codex/test-token-closure-reconcile'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      pull-requests: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-          package-manager-cache: false
-
-      - name: Reject committed generated files
-        run: node scripts/check-generated-files.mjs
-
-  checks:
-    name: ${{ matrix.check }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        check: [typecheck, build, test, "format:check"]
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: package-lock.json
-
-      - name: Use repository npm version
-        run: npm install --global npm@11.18.0
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run ${{ matrix.check }}
-        run: npm run "${{ matrix.check }}"
+      - name: Close only the temporary acceptance PR using GITHUB_TOKEN
+        run: gh api --method PATCH repos/kai987/Codex-Skills-grammar-learning-site-builder/pulls/17 -f state=closed --jq '{number,state,merged}'
+        env:
+          GH_TOKEN: ${{ github.token }}
