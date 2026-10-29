@@ -5,6 +5,9 @@ on:
     workflows:
       [PR description, PR description label recheck, PR description lifecycle]
     types: [completed]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,11 +26,14 @@ concurrency:
 jobs:
   comment:
     name: pr-description-feedback
-    if: github.event.workflow_run.event == 'pull_request'
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request') ||
+      ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
-      # workflow_run uses the default branch. Never check out a PR head/merge
+      # All allowed triggers use the default branch. Never check out a PR head/merge
       # ref, install PR dependencies, or download artifacts in this write job.
       - name: Check out trusted default-branch code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
