@@ -94,6 +94,24 @@ PR's identity and terminal state before every write, skipping reopened or
 changed PRs. An API failure for one PR does not prevent the remaining PRs from
 being checked, but fails the overall run visibly so a later sweep can retry.
 
+To view results, open **Actions → PR description feedback**, choose a scheduled
+or manually dispatched run, and open **Summary → PR description cleanup**.
+It shows **Scanned / Repaired / Skipped / Failed** totals and a table linking
+each PR to its closed/merged state, result, confirmed changes, and reason.
+Scanned counts unique, valid PR candidates found in this repository; the other
+three totals partition that count. Already-clean PRs, including those with no
+original feedback comment, are skipped, as are reopened, changed, or invalid
+live PRs. A failed or skipped row still records any earlier confirmed change,
+such as label removal; an unsuccessful write is never reported as confirmed.
+
+The summary is written even when a PR fails. A PR-listing failure explicitly
+marks the scan incomplete and shows only discovered candidates, rather than
+claiming a complete repository scan or inventing a failed PR. Empty scans show
+zero PRs. If the display limit is reached, the summary keeps the full counts,
+states how many rows were omitted, and points to the step logs for the complete
+report. It includes no PR titles, bodies, or tokens. These summaries apply only
+to scheduled/manual sweeps; they add no PR comments or repository artifacts.
+
 For an immediate catch-up, open that workflow in Actions, select **Run workflow**
 with the default branch (`main`), or run:
 

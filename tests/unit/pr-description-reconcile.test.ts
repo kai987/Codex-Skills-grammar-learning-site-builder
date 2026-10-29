@@ -34,6 +34,24 @@ const success = (value: unknown) => ({
   json: async () => structuredClone(value),
 });
 const failure = (status: number) => ({ ok: false, status });
+type ReconciliationReport = {
+  entries: Array<{
+    number: number;
+    status: "repaired" | "skipped" | "failed";
+    terminalStatus?: "closed" | "merged";
+    reason: string;
+    labelRemoved: boolean;
+    commentUpdated: boolean;
+    commentId?: number;
+  }>;
+  discoveryComplete: boolean;
+  scanError: string | null;
+};
+const emptyReport = (): ReconciliationReport => ({
+  entries: [],
+  discoveryComplete: false,
+  scanError: null,
+});
 
 function fakeGitHub({
   merged = false,
@@ -99,11 +117,12 @@ function fakeGitHub({
       return override === undefined ? original(input, init) : override;
     });
   };
-  const reconcile = () =>
+  const reconcile = (report?: ReconciliationReport) =>
     reconcileClosedDescriptionComments({
       repository,
       token: "test-token",
       fetchImpl,
+      ...(report ? { report } : {}),
     });
   return { pr, state, fetchImpl, writes, intercept, reconcile };
 }
@@ -245,6 +264,226 @@ describe("scheduled terminal feedback reconciliation", () => {
           );
         }),
       ).toBe(true);
+  });
+});
+
+describe("scheduled sweep reporting", () => {
+  it("reports every unique in-repository PR with repaired, skipped, or failed outcomes while preserving the return API", async () => {
+    const api = fakeGitHub();
+    const second = pullRequest(8, true);
+    const clean = pullRequest(9);
+    const failed = pullRequest(10);
+    api.state.candidates.push(second, clean, failed);
+    api.state.pulls.set(8, second);
+    api.state.pulls.set(9, clean);
+    api.state.pulls.set(10, failed);
+    api.state.comments.set(8, [ownedComment(901)]);
+    api.state.labels.set(8, [descriptionLabel]);
+    api.intercept((url) =>
+      url.pathname.endsWith("/pulls/10") ? failure(403) : undefined,
+    );
+    const report = emptyReport();
+    await expect(api.reconcile(report)).rejects.toBeInstanceOf(AggregateError);
+    expect(report.discoveryComplete).toBe(true);
+    expect(report.scanError).toBeNull();
+    expect(report.entries).toHaveLength(4);
+    expect(report.entries).toEqual([
+      expect.objectContaining({
+        number: 7,
+        status: "repaired",
+        terminalStatus: "closed",
+        labelRemoved: true,
+        commentUpdated: true,
+        commentId: 900,
+      }),
+      expect.objectContaining({
+        number: 8,
+        status: "repaired",
+        terminalStatus: "merged",
+        labelRemoved: true,
+        commentUpdated: true,
+        commentId: 901,
+      }),
+      expect.objectContaining({
+        number: 9,
+        status: "skipped",
+        labelRemoved: false,
+        commentUpdated: false,
+      }),
+      expect.objectContaining({
+        number: 10,
+        status: "failed",
+        labelRemoved: false,
+        commentUpdated: false,
+        reason: expect.stringContaining("403"),
+      }),
+    ]);
+    expect(report.entries.every((entry) => entry.reason.length > 0)).toBe(true);
+  });
+
+  it("reports an empty successful sweep and resets a reused report", async () => {
+    const api = fakeGitHub();
+    const report = emptyReport();
+    await api.reconcile(report);
+    api.state.candidates = [];
+    expect(await api.reconcile(report)).toEqual([]);
+    expect(report).toEqual({
+      entries: [],
+      discoveryComplete: true,
+      scanError: null,
+    });
+  });
+
+  it("does not double-count duplicate candidates or count unsafe and foreign PRs", async () => {
+    const api = fakeGitHub();
+    const foreign = pullRequest(8);
+    foreign.base.repo.full_name = "other/repo";
+    api.state.candidates.push(structuredClone(api.pr), foreign, pullRequest(0));
+    const report = emptyReport();
+    expect(await api.reconcile(report)).toHaveLength(1);
+    expect(report.entries).toHaveLength(1);
+    expect(report.entries[0]).toMatchObject({ number: 7, status: "repaired" });
+  });
+
+  it.each(["open", "invalid SHA", "wrong number"])(
+    "reports a known PR skipped when its live metadata is %s",
+    async (kind) => {
+      const api = fakeGitHub();
+      api.intercept((url) => {
+        if (!url.pathname.endsWith("/pulls/7")) return;
+        const live = structuredClone(api.pr);
+        if (kind === "open") live.state = "open";
+        if (kind === "invalid SHA") live.head.sha = "invalid";
+        if (kind === "wrong number") live.number = 8;
+        return success(live);
+      });
+      const report = emptyReport();
+      expect(await api.reconcile(report)).toEqual([]);
+      expect(report.entries).toEqual([
+        expect.objectContaining({
+          number: 7,
+          status: "skipped",
+          labelRemoved: false,
+          commentUpdated: false,
+        }),
+      ]);
+      expect(report.entries[0].reason).toBeTruthy();
+      expect(api.writes()).toEqual([]);
+    },
+  );
+
+  it("records confirmed label removal on a failed comment update and continues reporting other PRs", async () => {
+    const api = fakeGitHub();
+    const second = pullRequest(8);
+    api.state.candidates.push(second);
+    api.state.pulls.set(8, second);
+    api.intercept((_url, init) =>
+      init.method === "PATCH" ? failure(500) : undefined,
+    );
+    const report = emptyReport();
+    await expect(api.reconcile(report)).rejects.toBeInstanceOf(AggregateError);
+    expect(report.entries).toEqual([
+      expect.objectContaining({
+        number: 7,
+        status: "failed",
+        labelRemoved: true,
+        commentUpdated: false,
+        reason: expect.stringContaining("500"),
+      }),
+      expect.objectContaining({ number: 8, status: "skipped" }),
+    ]);
+  });
+
+  it("records a partial repair on a skipped PR that reopens before comment patching", async () => {
+    const api = fakeGitHub();
+    api.intercept((url, init) => {
+      if (url.pathname.endsWith(`/labels/${descriptionLabel}`) && init.method)
+        api.pr.state = "open";
+    });
+    const report = emptyReport();
+    expect(await api.reconcile(report)).toEqual([
+      { number: 7, action: "stale", label: "removed" },
+    ]);
+    expect(report.entries).toEqual([
+      expect.objectContaining({
+        number: 7,
+        status: "skipped",
+        labelRemoved: true,
+        commentUpdated: false,
+      }),
+    ]);
+  });
+
+  it("does not expose unknown exception messages or confirm ambiguous writes in its report", async () => {
+    const api = fakeGitHub();
+    api.intercept((_url, init) => {
+      if (init.method)
+        throw new Error("Bearer test-token <script>injected</script>");
+    });
+    const report = emptyReport();
+    await expect(api.reconcile(report)).rejects.toBeInstanceOf(AggregateError);
+    expect(report.entries[0]).toMatchObject({
+      number: 7,
+      status: "failed",
+      labelRemoved: false,
+      commentUpdated: false,
+    });
+    expect(JSON.stringify(report)).not.toMatch(
+      /test-token|injected|Bearer|<script>/,
+    );
+    expect(report.entries[0].reason).toBeTruthy();
+  });
+
+  it("reports timeout failures using a safe reason instead of the exception message", async () => {
+    const api = fakeGitHub();
+    api.intercept((url) => {
+      if (url.pathname.endsWith("/pulls/7"))
+        throw new DOMException("private request text", "TimeoutError");
+    });
+    const report = emptyReport();
+    await expect(api.reconcile(report)).rejects.toBeInstanceOf(AggregateError);
+    expect(report.entries[0].reason).toMatch(/timeout|timed out/i);
+    expect(JSON.stringify(report)).not.toContain("private request text");
+  });
+
+  it("records discovery failure separately without fabricating a failed PR", async () => {
+    const api = fakeGitHub();
+    api.intercept((url) =>
+      url.pathname.endsWith("/pulls") ? failure(500) : undefined,
+    );
+    const report = emptyReport();
+    await expect(api.reconcile(report)).rejects.toThrow();
+    expect(report.entries).toEqual([]);
+    expect(report.discoveryComplete).toBe(false);
+    expect(report.scanError).toContain("500");
+    expect(api.writes()).toEqual([]);
+  });
+
+  it("retains known PRs as unprocessed skips when a later discovery page fails", async () => {
+    const api = fakeGitHub();
+    api.state.candidates = Array.from({ length: 100 }, (_, index) =>
+      pullRequest(index + 100),
+    );
+    api.intercept((url) =>
+      url.pathname.endsWith("/pulls") && url.searchParams.get("page") === "2"
+        ? failure(403)
+        : undefined,
+    );
+    const report = emptyReport();
+    await expect(api.reconcile(report)).rejects.toThrow();
+    expect(report.discoveryComplete).toBe(false);
+    expect(report.scanError).toContain("403");
+    expect(report.entries).toHaveLength(100);
+    expect(report.entries.every((entry) => entry.status === "skipped")).toBe(
+      true,
+    );
+    expect(
+      report.entries.every(
+        (entry) => !entry.labelRemoved && !entry.commentUpdated,
+      ),
+    ).toBe(true);
+    expect(api.fetchImpl).toHaveBeenCalledTimes(2);
+    expect(api.writes()).toEqual([]);
   });
 });
 

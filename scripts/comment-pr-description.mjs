@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -6,6 +6,7 @@ import {
   requiredConfirmations,
   validateDescription,
 } from "./check-pr-description.mjs";
+import { renderReconciliationSummary } from "./pr-description-summary.mjs";
 
 export const commentMarker =
   "<!-- grammar-learning-site-builder:pr-description -->";
@@ -47,7 +48,7 @@ function createFeedbackClient({ repository, token, apiUrl, fetchImpl }) {
     }
     return response.status === 204 ? undefined : response.json();
   };
-  const list = async (route, key) => {
+  const list = async (route, key, onPage) => {
     const result = [];
     for (let page = 1; ; page++) {
       const data = await request(
@@ -56,6 +57,7 @@ function createFeedbackClient({ repository, token, apiUrl, fetchImpl }) {
       const items = key ? data?.[key] : data;
       if (!Array.isArray(items))
         throw new Error("Invalid paginated GitHub API response.");
+      onPage?.(items);
       result.push(...items);
       if (items.length < 100) return result;
     }
@@ -100,7 +102,12 @@ function terminalStatus(pr) {
   return pr.merged ? "merged" : "closed";
 }
 
-async function updateTerminalDescriptionComment(client, pr, isBoundTerminalPR) {
+async function updateTerminalDescriptionComment(
+  client,
+  pr,
+  isBoundTerminalPR,
+  result = { number: pr.number, action: "unchanged" },
+) {
   const { request, list, removeDescriptionLabel } = client;
   const status = terminalStatus(pr);
   const body = renderTerminalDescriptionComment(status);
@@ -110,7 +117,6 @@ async function updateTerminalDescriptionComment(client, pr, isBoundTerminalPR) {
   const labelChange = labels.some(isDescriptionLabel);
   // Never create a terminal comment when there was no original feedback.
   const commentChange = existing && existing.body !== body;
-  const result = { number: pr.number, action: "unchanged" };
   const stillTerminal = async () => {
     const latest = await request(`/pulls/${pr.number}`);
     return (
@@ -133,33 +139,90 @@ async function updateTerminalDescriptionComment(client, pr, isBoundTerminalPR) {
   return result;
 }
 
+function reconciliationFailureReason(error) {
+  // Do not put arbitrary exception messages (which can contain URLs, tokens,
+  // or untrusted response text) in summaries or the structured report.
+  if (
+    Number.isInteger(error?.status) &&
+    error.status >= 100 &&
+    error.status <= 599
+  )
+    return `GitHub API request failed (HTTP ${error.status}).`;
+  if (error?.name === "TimeoutError") return "GitHub API request timed out.";
+  if (error?.message === "Cannot determine whether the closed PR was merged.")
+    return "Live PR merged status is missing or invalid.";
+  if (error?.message === "Invalid paginated GitHub API response.")
+    return "GitHub API returned an invalid paginated response.";
+  return "Cleanup request failed; inspect the step logs and rerun the sweep.";
+}
+
 export async function reconcileClosedDescriptionComments({
   repository,
   token,
   apiUrl = "https://api.github.com",
   fetchImpl = fetch,
+  report = {},
 }) {
-  const client = createFeedbackClient({ repository, token, apiUrl, fetchImpl });
-  const isClosedPR = (pr) =>
+  report.entries = [];
+  report.discoveryComplete = false;
+  report.scanError = null;
+  let client;
+  try {
+    client = createFeedbackClient({ repository, token, apiUrl, fetchImpl });
+  } catch (error) {
+    report.scanError =
+      "PR feedback repository, API URL, or token configuration is invalid.";
+    throw error;
+  }
+  const isRepositoryPR = (pr) =>
     Number.isSafeInteger(pr?.number) &&
     pr.number > 0 &&
-    pr.state === "closed" &&
     pr.base?.repo?.full_name?.toLowerCase() === repository.toLowerCase();
+  const isClosedPR = (pr) => isRepositoryPR(pr) && pr.state === "closed";
   // No label filter or age cutoff: a lost PATCH can leave only an old comment
   // to repair. The default-branch schedule needs no PR event or source run.
-  const candidates = await client.list(
-    "/pulls?state=closed&sort=updated&direction=desc",
-  );
+  const candidates = new Map();
+  try {
+    await client.list(
+      "/pulls?state=closed&sort=updated&direction=desc",
+      undefined,
+      (page) => {
+        for (const candidate of page.filter(isRepositoryPR)) {
+          if (candidates.has(candidate.number)) continue;
+          const entry = {
+            number: candidate.number,
+            status: "skipped",
+            reason: "Not processed because PR discovery did not complete.",
+            labelRemoved: false,
+            commentUpdated: false,
+          };
+          report.entries.push(entry);
+          candidates.set(candidate.number, { candidate, entry });
+        }
+      },
+    );
+    report.discoveryComplete = true;
+  } catch (error) {
+    report.scanError = reconciliationFailureReason(error);
+    throw error;
+  }
   const results = [];
   const errors = [];
-  const seen = new Set();
-  for (const candidate of candidates.filter(isClosedPR)) {
-    if (seen.has(candidate.number)) continue;
-    seen.add(candidate.number);
+  for (const { candidate, entry } of candidates.values()) {
+    if (!isClosedPR(candidate)) {
+      entry.reason = "PR is no longer closed in the scan results.";
+      continue;
+    }
+    const progress = { number: candidate.number, action: "unchanged" };
+    const recordChanges = (result) => {
+      entry.labelRemoved = result.label === "removed";
+      entry.commentUpdated = result.action === "updated";
+      if (result.id) entry.commentId = result.id;
+    };
     try {
       const pr = await client.request(`/pulls/${candidate.number}`);
       if (
-        pr.number !== candidate.number ||
+        pr?.number !== candidate.number ||
         !isClosedPR(pr) ||
         !/^[a-f\d]{40}$/i.test(pr.head?.sha ?? "") ||
         typeof pr.head?.ref !== "string" ||
@@ -168,8 +231,14 @@ export async function reconcileClosedDescriptionComments({
         !pr.base.ref ||
         (pr.head?.repo != null &&
           !repoPattern.test(pr.head.repo.full_name ?? ""))
-      )
+      ) {
+        entry.reason =
+          pr?.state === "open"
+            ? "PR was reopened before inspection."
+            : "Live PR identity or metadata no longer matches the scan.";
         continue;
+      }
+      entry.terminalStatus = terminalStatus(pr);
       // Pin the live identity, including the closure epoch. Reopening and
       // closing again must not let a stale sweep overwrite newer feedback.
       const stillSamePR = (latest) =>
@@ -181,14 +250,32 @@ export async function reconcileClosedDescriptionComments({
         latest.base?.ref === pr.base.ref &&
         latest.merge_commit_sha === pr.merge_commit_sha &&
         latest.closed_at === pr.closed_at;
-      results.push(
-        await updateTerminalDescriptionComment(client, pr, stillSamePR),
+      const result = await updateTerminalDescriptionComment(
+        client,
+        pr,
+        stillSamePR,
+        progress,
       );
+      recordChanges(result);
+      if (result.action === "stale") {
+        entry.reason =
+          "PR reopened or its identity or terminal state changed before a write.";
+      } else if (entry.labelRemoved || entry.commentUpdated) {
+        entry.status = "repaired";
+        entry.reason = "Terminal feedback cleanup completed.";
+      } else {
+        entry.reason =
+          "No cleanup needed; labels and existing feedback are already up to date.";
+      }
+      results.push(result);
     } catch (error) {
       // One inaccessible PR must not starve every other missed closure. Mark
       // the run failed after attempting the rest; the next sweep can retry.
+      recordChanges(progress);
+      entry.status = "failed";
+      entry.reason = reconciliationFailureReason(error);
       errors.push(
-        new Error(`PR #${candidate.number}: ${error.message}`, {
+        new Error(`PR #${candidate.number}: ${entry.reason}`, {
           cause: error,
         }),
       );
@@ -528,7 +615,33 @@ if (
         throw new Error(
           "PR reconciliation must run on the repository's trusted default branch.",
         );
-      result = await reconcileClosedDescriptionComments(options);
+      const report = {};
+      let reconciliationError;
+      try {
+        result = await reconcileClosedDescriptionComments({
+          ...options,
+          report,
+        });
+      } catch (error) {
+        reconciliationError = error;
+        throw error;
+      } finally {
+        console.log("PR cleanup report:", JSON.stringify(report));
+        if (process.env.GITHUB_STEP_SUMMARY) {
+          try {
+            appendFileSync(
+              process.env.GITHUB_STEP_SUMMARY,
+              `\n${renderReconciliationSummary({ repository: options.repository, report })}\n`,
+              "utf8",
+            );
+          } catch {
+            // A reporting failure must not hide the original cleanup failure.
+            const message = "Could not write the PR cleanup run summary.";
+            if (reconciliationError) console.error(message);
+            else throw new Error(message);
+          }
+        }
+      }
     }
     console.log("PR description feedback:", JSON.stringify(result));
   } catch (error) {
